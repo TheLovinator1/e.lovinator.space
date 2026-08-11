@@ -1,5 +1,7 @@
 from ipaddress import ip_address
 from typing import TYPE_CHECKING
+from typing import Any
+from typing import TypedDict
 
 import wreq
 from htpy import head
@@ -23,15 +25,56 @@ if TYPE_CHECKING:
     from litestar.datastructures import Address
 
 
-STAT_FIELDS = {
+STAT_FIELDS: dict[str, str] = {
     "icon-comment": "comments",
     "icon-retweet": "retweets",
     "icon-heart": "likes",
     "icon-views": "views",
 }
 
+type Stats = dict[str, int | None]
 
-def generate_html(tweet: dict) -> Renderable:
+
+class TweetAuthor(TypedDict):
+    """Author metadata for a tweet."""
+
+    name: str | None
+    username: str | None
+    profile_url: str | None
+    avatar: str | None
+    verified: bool
+
+
+class TweetDate(TypedDict):
+    """Date metadata for a tweet."""
+
+    relative: str | None
+    published: str | None
+    title: str | None
+    url: str | None
+
+
+class TweetMedia(TypedDict):
+    """Media item attached to a tweet."""
+
+    url: str | None
+    thumbnail: str | None
+    width: int | None
+    height: int | None
+    type: str | None
+
+
+class Tweet(TypedDict):
+    """Structure of a tweet object."""
+
+    author: TweetAuthor
+    date: TweetDate
+    text: str | None
+    media: list[TweetMedia]
+    stats: Stats
+
+
+def generate_html(tweet: Tweet) -> Renderable:
     """Generate HTML for a tweet.
 
     Args:
@@ -41,7 +84,6 @@ def generate_html(tweet: dict) -> Renderable:
         The HTML for the tweet.
     """
     # Discord supports oEmbed, Open Graph, and Twitter Card metadata formats for rendering link embeds.
-
     meta_tags = [
         meta(property="theme-color", content="#1d9bf0"),
     ]
@@ -107,7 +149,7 @@ def attr(node: Node | None, name: str, default: str | None = None) -> str | None
 
 
 def parse_number(value: str) -> int | None:
-    """Convert '46,391' -> 46391.
+    """Convert '46,391' -> 46391, '1.5K' -> 1500.
 
     Args:
         value: The value to convert.
@@ -120,6 +162,17 @@ def parse_number(value: str) -> int | None:
         return None
 
     value = value.replace(",", "").strip()
+
+    if value.endswith(("K", "k")):
+        try:
+            return int(float(value[:-1]) * 1_000)
+        except ValueError:
+            pass
+    elif value.endswith(("M", "m")):
+        try:
+            return int(float(value[:-1]) * 1_000_000)
+        except ValueError:
+            pass
 
     try:
         return int(value)
@@ -158,13 +211,8 @@ def parse_stats(tweet: Node) -> dict[str, int | None]:
             logger.warning("Could not find field for icon classes.")
             continue
 
-        # The stat contains the icon plus the number.
-        # Extract the number by removing the icon element.
-        if not icon.parent:
-            logger.warning("Could not find parent for icon.")
-            continue
-
-        icon.parent.decompose()
+        # Extract stat value by removing icon element
+        icon.decompose()
         value = stat.text(strip=True)
 
         num = parse_number(value)
@@ -177,7 +225,7 @@ def parse_stats(tweet: Node) -> dict[str, int | None]:
     return stats
 
 
-def parse_tweet(html: str) -> dict:
+def parse_tweet(html: str) -> Tweet:
     """Parse a tweet from HTML.
 
     Args:
@@ -191,35 +239,48 @@ def parse_tweet(html: str) -> dict:
     """
     tree = HTMLParser(html)
 
-    tweet = tree.css_first(".tweet-body")
+    tweet = tree.css_first(".main-tweet .tweet-body") or tree.css_first(".tweet-body")
 
     if not tweet:
         msg = "Could not find .tweet-body"
         raise ValueError(msg)
 
     # Author
-    avatar = tweet.css_first(".tweet-avatar img")
-    fullname = tweet.css_first(".fullname")
-    username = tweet.css_first(".username")
+    avatar: Node | None = tweet.css_first(".tweet-avatar img")
+    fullname: Node | None = tweet.css_first(".fullname")
+    username: Node | None = tweet.css_first(".username")
 
     # Date
-    date_link = tweet.css_first(".tweet-date a")
-    published = tweet.css_first(".tweet-published")
+    date_link: Node | None = tweet.css_first(".tweet-date a")
+    published: Node | None = tweet.css_first(".tweet-published")
 
     # Text
-    content = tweet.css_first(".tweet-content")
+    content: Node | None = tweet.css_first(".tweet-content")
 
     # Media
-    media = []
+    media: list[TweetMedia] = []
 
     for attachment in tweet.css(".attachments .attachment"):
-        link = attachment.css_first("a")
-        image = attachment.css_first("img")
+        link: Node | None = attachment.css_first("a")
+        image: Node | None = attachment.css_first("img")
+        video: Node | None = attachment.css_first("video")
+        source: Node | None = attachment.css_first("video source") or attachment.css_first("source")
 
-        if link or image:
+        if video or source:
             media.append({
-                "url": attr(link, "href"),
-                "thumbnail": attr(image, "src"),
+                "url": attr(source, "src") or attr(video, "src"),
+                "thumbnail": attr(video, "poster"),
+                "width": None,
+                "height": None,
+                "type": attr(source, "type"),
+            })
+        elif link or image:
+            media.append({
+                "url": attr(link, "href") or attr(image, "src"),
+                "thumbnail": attr(image, "src") or attr(link, "href"),
+                "width": None,
+                "height": None,
+                "type": None,
             })
 
     return {
@@ -243,7 +304,7 @@ def parse_tweet(html: str) -> dict:
 
 
 @get("/{username:str}/status/{tweet_id:str}")
-async def twitter(request: Request, username: str, tweet_id: str) -> dict[str, str] | Redirect:
+async def twitter(request: Request, username: str, tweet_id: str) -> dict[str, Any] | Redirect:
     """Handle Twitter requests.
 
     https://twitter.com/DiscussingFilm/status/2086143411984208230
