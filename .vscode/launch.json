@@ -1,11 +1,12 @@
 {
+    "version": "0.2.0",
     "configurations": [
         {
-            "name": "Launch file",
-            "type": "go",
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
             "request": "launch",
-            "mode": "debug",
-            "program": "${file}"
+            "program": "${file}",
+            "console": "integratedTerminal"
         }
     ]
 }
