@@ -1,306 +1,268 @@
+import json
+import re
+from dataclasses import dataclass
+from ipaddress import IPv4Address
+from ipaddress import IPv4Network
+from ipaddress import IPv6Address
 from ipaddress import ip_address
 from typing import TYPE_CHECKING
 from typing import Any
-from typing import TypedDict
 
-import wreq
-from htpy import head
-from htpy import html
-from htpy import meta
+import niquests
+from gallery_dl import config
+from gallery_dl import job
 from litestar import Request
 from litestar import get
 from litestar.response import Redirect
 from loguru import logger
-from selectolax.parser import HTMLParser
-from selectolax.parser import Node
-from wreq import Client
-from wreq import Emulation
+from platformdirs import PlatformDirs
 
 from e.discord import DiscordIPs
 from e.discord import Prefix
+from e.discord import Service
 from e.discord import get_discord_ips
 
 if TYPE_CHECKING:
-    from htpy._types import Renderable
+    from pathlib import Path
+
     from litestar.datastructures import Address
 
+import anyio
+from anyio import to_thread
 
-STAT_FIELDS: dict[str, str] = {
-    "icon-comment": "comments",
-    "icon-retweet": "retweets",
-    "icon-heart": "likes",
-    "icon-views": "views",
-}
+dirs: PlatformDirs = PlatformDirs(
+    appauthor="TheLovinator",
+    appname="e",
+    ensure_exists=True,
+    roaming=True,
+)
 
-type Stats = dict[str, int | None]
+DATADIR: Path = dirs.user_data_path
+ARCHIVE_PATH: Path = DATADIR / "twitter.sqlite3"
+BASE_DIRECTORY: Path = DATADIR / "Twitter" / "Downloads"
 
+BASE_DIRECTORY.mkdir(parents=True, exist_ok=True)
 
-class TweetAuthor(TypedDict):
-    """Author metadata for a tweet."""
-
-    name: str | None
-    username: str | None
-    profile_url: str | None
-    avatar: str | None
-    verified: bool
-
-
-class TweetDate(TypedDict):
-    """Date metadata for a tweet."""
-
-    relative: str | None
-    published: str | None
-    title: str | None
-    url: str | None
+MAX_CONCURRENT_DOWNLOADS = 8
+REQUEST_TIMEOUT = 30
 
 
-class TweetMedia(TypedDict):
-    """Media item attached to a tweet."""
+@dataclass(frozen=True, slots=True)
+class Download:
+    """A file to download."""
 
-    url: str | None
-    thumbnail: str | None
-    width: int | None
-    height: int | None
-    type: str | None
+    url: str
+    path: Path
 
 
-class Tweet(TypedDict):
-    """Structure of a tweet object."""
+def sanitize_path_component(value: str) -> str:
+    """Make a string safe to use as a single filesystem path component."""
+    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value)
+    value = value.strip(" .")
 
-    author: TweetAuthor
-    date: TweetDate
-    text: str | None
-    media: list[TweetMedia]
-    stats: Stats
+    return value or "unknown"
 
 
-def generate_html(tweet: Tweet) -> Renderable:
-    """Generate HTML for a tweet.
+def configure_extractor() -> None:
+    """Configure the Nitter extractor."""
+    config.load()
 
-    Args:
-        tweet: The tweet to generate HTML for.
-
-    Returns:
-        The HTML for the tweet.
-    """
-    # Discord supports oEmbed, Open Graph, and Twitter Card metadata formats for rendering link embeds.
-    meta_tags = [
-        meta(property="theme-color", content="#1d9bf0"),
-    ]
-
-    # loop through all the images and add as og:image
-    meta_tags.extend(
-        meta(
-            property="og:image",
-            content=image["thumbnail"],
-            width=image["width"],
-            height=image["height"],
-            type=image["type"],
-            secure_url=image["thumbnail"],
-            alt=tweet["text"],
-        )
-        for image in tweet["media"]
+    config.set(
+        path=("extractor",),
+        key="base-directory",
+        value=BASE_DIRECTORY,
+    )
+    config.set(
+        path=("extractor", "nitter"),
+        key="quoted",
+        value=True,
+    )
+    config.set(
+        path=("extractor", "nitter"),
+        key="retweets",
+        value=True,
+    )
+    config.set(
+        path=("extractor", "nitter"),
+        key="directory",
+        value=["{author['name']}", "{tweet_id}"],
+    )
+    config.set(
+        path=("extractor", "nitter"),
+        key="filename",
+        value="{num}.{extension}",
+    )
+    config.set(
+        path=("extractor",),
+        key="archive",
+        value=str(ARCHIVE_PATH),
+    )
+    config.set(
+        path=("extractor",),
+        key="archive-pragma",
+        value=["journal_mode=WAL", "synchronous=NORMAL"],
+    )
+    config.set(
+        path=("extractor", "nitter"),
+        key="postprocessors",
+        value=[
+            {
+                "name": "metadata",
+                "mode": "json",
+            },
+        ],
     )
 
-    return html[
-        head[
-            meta(name="viewport", content="width=device-width, initial-scale=1.0"),
-            *meta_tags,
-        ]
+
+def extract_data(
+    job_data: list[Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Extract tweet metadata and media from extractor output."""
+    try:
+        meta = next(item[1] for item in job_data if item[0] == 2)
+    except StopIteration as exc:
+        msg = "Extractor returned no tweet metadata"
+        raise RuntimeError(msg) from exc
+
+    media_items = [
+        {
+            "url": item[1],
+            **item[2],
+        }
+        for item in job_data
+        if item[0] == 3
     ]
 
-
-def save_data_to_disk(tweet: dict) -> None:
-    """Save tweet data to DATA_DIR/twitter/<username>/<tweet_id>/data.json.
-
-    Has version number so we can update the file later if data changes.
-
-    Args:
-        tweet: The tweet to save.
-
-    """
+    return meta, media_items
 
 
-def text(node: Node | None, default: str | None = None) -> str | None:
-    """Safely extract text from a node.
+def create_downloads(
+    media_items: list[dict[str, Any]],
+    target_dir: Path,
+) -> list[Download]:
+    """Create download targets for extracted media."""
+    downloads: list[Download] = []
 
-    Args:
-        node: The node to extract text from.
-        default: The default value to return if the node is None.
+    for index, item in enumerate(media_items, start=1):
+        extension = str(item["extension"]).lstrip(".").lower()
+        number = item.get("num", index)
 
-    Returns:
-        The text of the node, or the default value if the node is None.
-    """
-    return node.text(strip=True) if node else default
+        path = target_dir / f"{number}.{extension}"
 
-
-def attr(node: Node | None, name: str, default: str | None = None) -> str | None:
-    """Safely extract an attribute from a node.
-
-    Args:
-        node: The node to extract the attribute from.
-        name: The name of the attribute.
-        default: The default value to return if the node is None.
-
-    Returns:
-        The attribute of the node, or the default value if the node is None.
-    """
-    return node.attributes.get(name, default) if node else default
-
-
-def parse_number(value: str) -> int | None:
-    """Convert '46,391' -> 46391, '1.5K' -> 1500.
-
-    Args:
-        value: The value to convert.
-
-    Returns:
-        The converted value.
-    """
-    if not value:
-        logger.warning("Value is empty.")
-        return None
-
-    value = value.replace(",", "").strip()
-
-    if value.endswith(("K", "k")):
-        try:
-            return int(float(value[:-1]) * 1_000)
-        except ValueError:
-            pass
-    elif value.endswith(("M", "m")):
-        try:
-            return int(float(value[:-1]) * 1_000_000)
-        except ValueError:
-            pass
-
-    try:
-        return int(value)
-    except ValueError:
-        logger.error("Could not convert value '{}' to int.", value)
-        return None
-
-
-def parse_stats(tweet: Node) -> dict[str, int | None]:
-    """Parse the stats of a tweet.
-
-    Args:
-        tweet: The tweet to parse the stats from.
-
-    Returns:
-        The stats of the tweet.
-    """
-    stats = {}
-
-    for stat in tweet.css(".tweet-stat"):
-        icon = stat.css_first("span[class*='icon-']")
-        if not icon:
-            logger.warning("Could not find icon for stat.")
-            continue
-
-        classes = attr(icon, "class", "")
-        if not classes:
-            logger.warning("Could not find classes for icon.")
-            continue
-
-        field = next(
-            (field for icon_class, field in STAT_FIELDS.items() if icon_class in classes),
-            None,
+        downloads.append(
+            Download(
+                url=str(item["url"]),
+                path=path,
+            ),
         )
-        if not field:
-            logger.warning("Could not find field for icon classes.")
-            continue
 
-        # Extract stat value by removing icon element
-        icon.decompose()
-        value = stat.text(strip=True)
-
-        num = parse_number(value)
-        if num is None:
-            logger.warning("Could not parse number for stat.")
-            continue
-
-        stats[field] = num
-
-    return stats
+    return downloads
 
 
-def parse_tweet(html: str) -> Tweet:
-    """Parse a tweet from HTML.
+async def download_file(
+    session: niquests.AsyncSession,
+    download: Download,
+    limiter: anyio.CapacityLimiter,
+) -> None:
+    """Download one file."""
+    async with limiter:
+        logger.info(
+            "Downloading %s to %s",
+            download.url,
+            download.path,
+        )
 
-    Args:
-        html: The HTML of the tweet.
+        response: niquests.Response = await session.get(
+            download.url,
+            timeout=REQUEST_TIMEOUT,
+        )
+        response.raise_for_status()
+        content: bytes | None = response.content
+        if content is None:
+            msg: str = f"No content received from {download.url}"
+            raise RuntimeError(msg)
 
-    Returns:
-        The parsed tweet.
+        await anyio.Path(download.path).write_bytes(content)
 
-    Raises:
-        ValueError: If .tweet-body cannot be found.
-    """
-    tree = HTMLParser(html)
 
-    tweet = tree.css_first(".main-tweet .tweet-body") or tree.css_first(".tweet-body")
+async def download_files(
+    downloads: list[Download],
+) -> None:
+    """Download files concurrently with bounded concurrency."""
+    limiter = anyio.CapacityLimiter(MAX_CONCURRENT_DOWNLOADS)
 
-    if not tweet:
-        msg = "Could not find .tweet-body"
-        raise ValueError(msg)
+    async with niquests.AsyncSession() as session, anyio.create_task_group() as task_group:
+        for download in downloads:
+            task_group.start_soon(
+                download_file,
+                session,
+                download,
+                limiter,
+            )
 
-    # Author
-    avatar: Node | None = tweet.css_first(".tweet-avatar img")
-    fullname: Node | None = tweet.css_first(".fullname")
-    username: Node | None = tweet.css_first(".username")
 
-    # Date
-    date_link: Node | None = tweet.css_first(".tweet-date a")
-    published: Node | None = tweet.css_first(".tweet-published")
+async def write_metadata(
+    path: Path,
+    metadata: dict[str, Any],
+) -> None:
+    """Write metadata JSON."""
+    content = json.dumps(
+        metadata,
+        default=str,
+        indent=2,
+        ensure_ascii=False,
+    )
 
-    # Text
-    content: Node | None = tweet.css_first(".tweet-content")
+    await anyio.Path(path).write_text(
+        content,
+        encoding="utf-8",
+    )
 
-    # Media
-    media: list[TweetMedia] = []
 
-    for attachment in tweet.css(".attachments .attachment"):
-        link: Node | None = attachment.css_first("a")
-        image: Node | None = attachment.css_first("img")
-        video: Node | None = attachment.css_first("video")
-        source: Node | None = attachment.css_first("video source") or attachment.css_first("source")
+async def download(url: str) -> Path | None:
+    """Download a tweet and its media."""
+    configure_extractor()
 
-        if video or source:
-            media.append({
-                "url": attr(source, "src") or attr(video, "src"),
-                "thumbnail": attr(video, "poster"),
-                "width": None,
-                "height": None,
-                "type": attr(source, "type"),
-            })
-        elif link or image:
-            media.append({
-                "url": attr(link, "href") or attr(image, "src"),
-                "thumbnail": attr(image, "src") or attr(link, "href"),
-                "width": None,
-                "height": None,
-                "type": None,
-            })
+    data_job = job.DataJob(url)
 
-    return {
-        "author": {
-            "name": text(fullname),
-            "username": text(username),
-            "profile_url": attr(username, "href"),
-            "avatar": attr(avatar, "src"),
-            "verified": bool(tweet.css_first(".verified-icon")),
-        },
-        "date": {
-            "relative": text(date_link),
-            "published": text(published),
-            "title": attr(date_link, "title"),
-            "url": attr(date_link, "href"),
-        },
-        "text": text(content),
-        "media": media,
-        "stats": parse_stats(tweet),
-    }
+    # DataJob.run() is synchronous, so don't block the event loop.
+    await to_thread.run_sync(data_job.run)
+
+    job_data = data_job.data
+
+    if not job_data:
+        logger.warning("No data returned for %s", url)
+        return None
+
+    meta, media_items = extract_data(job_data)
+
+    author = meta.get("author", {}).get("name") or meta.get("user", {}).get("name") or "unknown"
+    author = sanitize_path_component(str(author))
+
+    tweet_id = sanitize_path_component(str(meta["tweet_id"]))
+
+    target_dir = BASE_DIRECTORY / author / tweet_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    downloads = create_downloads(media_items, target_dir)
+
+    await download_files(downloads)
+
+    downloaded_files = [
+        {
+            "url": download.url,
+            "filename": download.path.name,
+            "path": str(download.path.resolve()),
+        }
+        for download in downloads
+    ]
+
+    meta["files"] = downloaded_files
+
+    json_path = target_dir / "metadata.json"
+    await write_metadata(json_path, meta)
+
+    return json_path
 
 
 @get("/{username:str}/status/{tweet_id:str}")
@@ -342,9 +304,9 @@ async def twitter(request: Request, username: str, tweet_id: str) -> dict[str, A
     ips: DiscordIPs = await get_discord_ips()
 
     # Append ["127.0.0.1"] for local testing.
-    ips.prefixes.append(Prefix(ipv4_prefix="127.0.0.1", services=["api", "media"]))
+    ips.prefixes.append(Prefix(ipv4Prefix=IPv4Network("127.0.0.1"), services=[Service("api"), Service("media")]))
 
-    client_ip = ip_address(client.host)
+    client_ip: IPv4Address | IPv6Address = ip_address(client.host)
 
     for ip in ips.prefixes:
         if client_ip in ip.ipv4_prefix:
@@ -362,12 +324,7 @@ async def twitter(request: Request, username: str, tweet_id: str) -> dict[str, A
     nitter_url = f"https://nitter.net/{username}/status/{tweet_id}"
     logger.info("Getting tweet from Nitter: {}", nitter_url)
 
-    wreq_client = Client(emulation=Emulation.Chrome149)
-    resp: wreq.Response = await wreq_client.get(nitter_url)
-    data: str = await resp.text()
-    logger.info("Got tweet from Nitter: {}", data)
-
-    tweet = parse_tweet(data)
+    tweet = download(url=nitter_url)
 
     logger.info(tweet)
 
@@ -377,9 +334,4 @@ async def twitter(request: Request, username: str, tweet_id: str) -> dict[str, A
         "e_url": str(request.url),
         "username": username,
         "tweet_id": tweet_id,
-        "media": tweet["media"],
-        "author": tweet["author"],
-        "date": tweet["date"],
-        "text": tweet["text"],
-        "stats": tweet["stats"],
     }

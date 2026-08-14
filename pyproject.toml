@@ -6,9 +6,12 @@ readme = "README.md"
 authors = [{ name = "Joakim Hellsén", email = "tlovinator@gmail.com" }]
 requires-python = ">=3.14"
 dependencies = [
+    "anyio>=4.14.2",
+    "gallery-dl",
     "htpy>=26.5.1",
     "litestar>=2.24.0",
     "loguru>=0.7.3",
+    "niquests>=3.21.0",
     "platformdirs>=4.11.1",
     "pydantic>=2.13.4",
     "selectolax>=0.4.11",
@@ -92,6 +95,9 @@ lint.ignore = [
     "suspicious-non-cryptographic-random-usage",
     "private-member-access",
 ]
+
+[tool.uv.sources]
+gallery-dl = { url = "https://codeberg.org/mikf/gallery-dl/archive/master.tar.gz" }
 
 [dependency-groups]
 dev = ["pytest>=9.1.1"]

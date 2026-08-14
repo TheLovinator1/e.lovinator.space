@@ -1,9 +1,14 @@
+import logging
+
 import uvicorn
+from gallery_dl import output
 from litestar import Litestar
 from litestar import get
 from litestar.response import Response
 
 from e.twitter import twitter
+
+output.initialize_logging(logging.INFO)
 
 
 @get("/favicon.ico")

@@ -4,9 +4,12 @@
         "appname",
         "htpy",
         "Lovinator",
+        "niquests",
         "Nitter",
         "Renderable",
         "selectolax",
         "wreq"
-    ]
+    ],
+    "python.analysis.typeEvaluation.strictSetInference": true,
+    "python.analysis.typeCheckingMode": "standard"
 }
