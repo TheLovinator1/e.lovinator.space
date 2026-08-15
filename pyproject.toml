@@ -12,6 +12,7 @@ dependencies = [
     "litestar>=2.24.0",
     "loguru>=0.7.3",
     "niquests>=3.21.0",
+    "openai>=3.1.0",
     "platformdirs>=4.11.1",
     "pydantic>=2.13.4",
     "python-dotenv>=1.1.0",

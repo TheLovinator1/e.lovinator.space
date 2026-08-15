@@ -36,6 +36,7 @@ from e.settings import ARCHIVE_PATH
 from e.settings import NITTER_INSTANCE
 from e.settings import ORIGINAL_URL
 from e.settings import TWITTER_MEDIA_DIR
+from e.translate import translate_embed
 
 CONTENT_TYPES: dict[str, str] = {
     "jpg": "image/jpeg",
@@ -725,6 +726,51 @@ async def twitter(
 
     Returns:
         A redirect for non-Discord clients, or an HTML embed page.
+    """
+    return await _twitter(request, username, tweet_id)
+
+
+@get("/{username:str}/status/{tweet_id:str}/en")
+async def twitter_en(
+    request: Request,
+    username: Annotated[str, PathParameter()],
+    tweet_id: Annotated[str, PathParameter()],
+) -> Response | Redirect:
+    """Serve an English-translated Open Graph embed for a tweet.
+
+    Like :func:`twitter`, but the tweet text is translated into English with
+    OpenAI before the embed is rendered.
+
+    Args:
+        request: The incoming request.
+        username: The Twitter/X handle.
+        tweet_id: The status ID of the tweet.
+
+    Returns:
+        A redirect for non-Discord clients, or an HTML embed page.
+    """
+    return await _twitter(request, username, tweet_id, translate=True)
+
+
+async def _twitter(
+    request: Request,
+    username: str,
+    tweet_id: str,
+    *,
+    translate: bool = False,
+) -> Response | Redirect:
+    """Serve an Open Graph embed for a tweet to Discord clients.
+
+    Non-Discord clients are redirected to the original tweet on X.
+
+    Args:
+        request: The incoming request.
+        username: The Twitter/X handle.
+        tweet_id: The status ID of the tweet.
+        translate: Whether to translate the tweet text into English.
+
+    Returns:
+        A redirect for non-Discord clients, or an HTML embed page.
 
     Raises:
         ValueError: If the client address is missing.
@@ -756,46 +802,46 @@ async def twitter(
             url=canonical_url,
             media=(),
         )
-        return Response(
-            content=generate_html(embed),
-            media_type="text/html",
-        )
-
-    meta, media_items = result
-    background = None
-
-    if video_url := _direct_video_url(media_items):
-        width, height = _video_dimensions(video_url)
-        embed = build_embed(
-            meta,
-            [],
-            base_url=base_url_for(request),
-            canonical_url=canonical_url,
-            video_url=video_url,
-            width=width,
-            height=height,
-        )
-        background = BackgroundTask(download_background, nitter_url, meta, media_items)
-    elif image_urls := original_image_urls(media_items):
-        # Embed the images straight from Twitter's CDN so Discord does not
-        # have to wait for the archive download; archive in the background.
-        embed = build_embed(
-            meta,
-            [],
-            base_url=base_url_for(request),
-            canonical_url=canonical_url,
-            image_urls=tuple(image_urls),
-        )
-        background = BackgroundTask(download_background, nitter_url, meta, media_items)
+        background = None
     else:
-        directory, files = await to_thread.run_sync(download_media, nitter_url)
-        archive(meta, media_items, directory, files)
-        embed = build_embed(
-            meta,
-            files,
-            base_url=base_url_for(request),
-            canonical_url=canonical_url,
-        )
+        meta, media_items = result
+        background = None
+
+        if video_url := _direct_video_url(media_items):
+            width, height = _video_dimensions(video_url)
+            embed = build_embed(
+                meta,
+                [],
+                base_url=base_url_for(request),
+                canonical_url=canonical_url,
+                video_url=video_url,
+                width=width,
+                height=height,
+            )
+            background = BackgroundTask(download_background, nitter_url, meta, media_items)
+        elif image_urls := original_image_urls(media_items):
+            # Embed the images straight from Twitter's CDN so Discord does not
+            # have to wait for the archive download; archive in the background.
+            embed = build_embed(
+                meta,
+                [],
+                base_url=base_url_for(request),
+                canonical_url=canonical_url,
+                image_urls=tuple(image_urls),
+            )
+            background = BackgroundTask(download_background, nitter_url, meta, media_items)
+        else:
+            directory, files = await to_thread.run_sync(download_media, nitter_url)
+            archive(meta, media_items, directory, files)
+            embed = build_embed(
+                meta,
+                files,
+                base_url=base_url_for(request),
+                canonical_url=canonical_url,
+            )
+
+    if translate:
+        embed = await translate_embed(embed, ("description",))
 
     return Response(
         content=generate_html(embed),

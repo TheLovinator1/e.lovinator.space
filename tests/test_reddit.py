@@ -21,6 +21,7 @@ from e.reddit import build_embed
 from e.settings import REDDIT_CLIENT_ID
 from e.settings import REDDIT_MEDIA_DIR
 from e.settings import REDDIT_USER_AGENT
+from e.twitter import Embed
 
 if TYPE_CHECKING:
     import pytest
@@ -333,3 +334,63 @@ def test_route_redirects_non_discord(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert response.status_code == 302
     assert response.headers["location"] == "https://www.reddit.com/r/aww/comments/abc123"
+
+
+def test_route_en_translates_post_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the /en route serves a translated embed."""
+    monkeypatch.setattr(
+        reddit_module,
+        "client_ip_from",
+        lambda request: ip_address("127.0.0.1"),
+    )
+
+    async def fake_fetch_meta(reddit_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return dict(REDDIT_META), []
+
+    async def fake_download_media(reddit_url: str) -> tuple[Path | None, list[Path]]:  # ruff: ignore[unused-async]
+        return None, [Path("1.jpg")]
+
+    async def fake_translate_embed(embed: Embed, fields: tuple[str, ...]) -> Embed:  # ruff: ignore[unused-async]
+        assert fields == ("title", "description")
+        return Embed(title="Söt valp", description="Titta på den här duktiga pojken", url=embed.url, media=embed.media)
+
+    monkeypatch.setattr(reddit_module, "fetch_meta_async", fake_fetch_meta)
+    monkeypatch.setattr(reddit_module, "download_media_async", fake_download_media)
+    monkeypatch.setattr(reddit_module, "translate_embed", fake_translate_embed)
+
+    with TestClient(app=app) as client:
+        response = client.get("/r/aww/comments/abc123/en")
+
+    assert response.status_code == 200
+    assert 'property="og:title" content="Söt valp"' in response.text
+    assert 'property="og:description" content="Titta på den här duktiga pojken"' in response.text
+
+
+def test_route_en_with_slug_translates_post_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that a post URL with a slug is also served translated."""
+    monkeypatch.setattr(
+        reddit_module,
+        "client_ip_from",
+        lambda request: ip_address("127.0.0.1"),
+    )
+
+    async def fake_fetch_meta(reddit_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return dict(REDDIT_META), []
+
+    async def fake_download_media(reddit_url: str) -> tuple[Path | None, list[Path]]:  # ruff: ignore[unused-async]
+        return None, [Path("1.jpg")]
+
+    async def fake_translate_embed(embed: Embed, fields: tuple[str, ...]) -> Embed:  # ruff: ignore[unused-async]
+        assert fields == ("title", "description")
+        return Embed(title="Söt valp", description="Titta på den här duktiga pojken", url=embed.url, media=embed.media)
+
+    monkeypatch.setattr(reddit_module, "fetch_meta_async", fake_fetch_meta)
+    monkeypatch.setattr(reddit_module, "download_media_async", fake_download_media)
+    monkeypatch.setattr(reddit_module, "translate_embed", fake_translate_embed)
+
+    with TestClient(app=app) as client:
+        response = client.get("/r/aww/comments/abc123/cute_puppy/en")
+
+    assert response.status_code == 200
+    assert 'property="og:title" content="Söt valp"' in response.text
+    assert 'property="og:description" content="Titta på den här duktiga pojken"' in response.text

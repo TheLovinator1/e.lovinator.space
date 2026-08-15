@@ -459,3 +459,56 @@ def test_route_redirects_non_discord(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert response.status_code == 302
     assert response.headers["location"] == ("https://twitter.com/DiscussingFilm/status/2086143411984208230")
+
+
+def test_route_en_translates_tweet_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the /en route serves a translated embed."""
+    monkeypatch.setattr(
+        twitter_module,
+        "client_ip_from",
+        lambda request: ip_address("127.0.0.1"),
+    )
+
+    async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return KWDICT, []
+
+    def fake_download_media(nitter_url: str) -> tuple[Path | None, list[Path]]:
+        return None, [Path("1.mp4")]
+
+    async def fake_translate_embed(embed: Embed, fields: tuple[str, ...]) -> Embed:  # ruff: ignore[unused-async]
+        assert fields == ("description",)
+        return Embed(title=embed.title, description="Ryan Hurst shared a photo.", url=embed.url, media=embed.media)
+
+    monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
+    monkeypatch.setattr(twitter_module, "download_media", fake_download_media)
+    monkeypatch.setattr(twitter_module, "translate_embed", fake_translate_embed)
+
+    with TestClient(app=app) as client:
+        response = client.get("/DiscussingFilm/status/2086143411984208230/en")
+
+    assert response.status_code == 200
+    assert 'property="og:description" content="Ryan Hurst shared a photo."' in response.text
+    assert 'name="twitter:description" content="Ryan Hurst shared a photo."' in response.text
+
+
+def test_route_en_redirects_non_discord(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that non-Discord clients are redirected even on /en routes."""
+    monkeypatch.setattr(
+        twitter_module,
+        "client_ip_from",
+        lambda request: ip_address("203.0.113.5"),
+    )
+
+    async def fake_get_discord_ips() -> DiscordIPs:  # ruff: ignore[unused-async]
+        return _empty_ips()
+
+    monkeypatch.setattr(twitter_module, "get_discord_ips", fake_get_discord_ips)
+
+    with TestClient(app=app) as client:
+        response = client.get(
+            "/DiscussingFilm/status/2086143411984208230/en",
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == ("https://twitter.com/DiscussingFilm/status/2086143411984208230")

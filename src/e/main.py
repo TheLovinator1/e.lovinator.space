@@ -11,7 +11,9 @@ from litestar.response import Response
 
 from e.media import media
 from e.reddit import reddit
+from e.reddit import reddit_en
 from e.twitter import twitter
+from e.twitter import twitter_en
 
 output.initialize_logging(logging.INFO)
 
@@ -29,7 +31,9 @@ async def favicon() -> Response:  # ruff: ignore[unused-async]
 app = Litestar(
     route_handlers=[
         twitter,
+        twitter_en,
         reddit,
+        reddit_en,
         media,
         favicon,
     ],

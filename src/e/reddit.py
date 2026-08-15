@@ -23,6 +23,7 @@ from e.settings import REDDIT_MEDIA_DIR
 from e.settings import REDDIT_REFRESH_TOKEN
 from e.settings import REDDIT_URL
 from e.settings import REDDIT_USER_AGENT
+from e.translate import translate_embed
 from e.twitter import Embed
 from e.twitter import Media
 from e.twitter import base_url_for
@@ -377,6 +378,62 @@ async def reddit(
 
     Returns:
         A redirect for non-Discord clients, or an HTML embed page.
+    """
+    return await _reddit(request, subreddit, post_id, slug)
+
+
+@get(
+    [
+        "/r/{subreddit:str}/comments/{post_id:str}/en",
+        "/r/{subreddit:str}/comments/{post_id:str}/{slug:str}/en",
+    ],
+)
+async def reddit_en(
+    request: Request,
+    subreddit: Annotated[str, PathParameter()],
+    post_id: Annotated[str, PathParameter()],
+    slug: Annotated[str, PathParameter()] = "",
+) -> Response | Redirect:
+    """Serve an English-translated Open Graph embed for a Reddit post.
+
+    Like :func:`reddit`, but the post title and text are translated into
+    English with OpenAI before the embed is rendered.
+
+    Args:
+        request: The incoming request.
+        subreddit: The subreddit the post belongs to.
+        post_id: The ID of the post.
+        slug: The optional post slug. Accepted for compatibility with Reddit
+            URLs, but ignored (post IDs are unique).
+
+    Returns:
+        A redirect for non-Discord clients, or an HTML embed page.
+    """
+    return await _reddit(request, subreddit, post_id, slug, translate=True)
+
+
+async def _reddit(
+    request: Request,
+    subreddit: str,
+    post_id: str,
+    slug: str = "",
+    *,
+    translate: bool = False,
+) -> Response | Redirect:
+    """Serve an Open Graph embed for a Reddit post to Discord clients.
+
+    Non-Discord clients are redirected to the original post on Reddit.
+
+    Args:
+        request: The incoming request.
+        subreddit: The subreddit the post belongs to.
+        post_id: The ID of the post.
+        slug: The optional post slug. Accepted for compatibility with Reddit
+            URLs, but ignored (post IDs are unique).
+        translate: Whether to translate the post text into English.
+
+    Returns:
+        A redirect for non-Discord clients, or an HTML embed page.
 
     Raises:
         ValueError: If the client address is missing.
@@ -407,44 +464,45 @@ async def reddit(
             url=canonical_url,
             media=(),
         )
-        return Response(
-            content=generate_html(embed),
-            media_type="text/html",
-        )
-
-    meta, media_items = result
-    background = None
-
-    fallback_url = _fallback_url(meta)
-    if fallback_url is not None:
-        # Serve the embed immediately using Reddit's direct MP4, then download
-        # it in the background so subsequent requests are self-hosted.
-        target = _video_path(meta)
-        if target.is_file():
-            embed = build_embed(
-                meta,
-                [target],
-                base_url=base_url_for(request),
-                canonical_url=canonical_url,
-            )
-        else:
-            embed = build_embed(
-                meta,
-                [],
-                base_url=base_url_for(request),
-                canonical_url=canonical_url,
-                video_url=fallback_url,
-            )
-            background = BackgroundTask(download_video_background, fallback_url, target, meta, media_items)
+        background = None
     else:
-        directory, files = await download_media_async(canonical_url)
-        archive(meta, media_items, directory, files)
-        embed = build_embed(
-            meta,
-            files,
-            base_url=base_url_for(request),
-            canonical_url=canonical_url,
-        )
+        meta, media_items = result
+        background = None
+
+        fallback_url = _fallback_url(meta)
+        if fallback_url is not None:
+            # Serve the embed immediately using Reddit's direct MP4, then
+            # download it in the background so subsequent requests are
+            # self-hosted.
+            target = _video_path(meta)
+            if target.is_file():
+                embed = build_embed(
+                    meta,
+                    [target],
+                    base_url=base_url_for(request),
+                    canonical_url=canonical_url,
+                )
+            else:
+                embed = build_embed(
+                    meta,
+                    [],
+                    base_url=base_url_for(request),
+                    canonical_url=canonical_url,
+                    video_url=fallback_url,
+                )
+                background = BackgroundTask(download_video_background, fallback_url, target, meta, media_items)
+        else:
+            directory, files = await download_media_async(canonical_url)
+            archive(meta, media_items, directory, files)
+            embed = build_embed(
+                meta,
+                files,
+                base_url=base_url_for(request),
+                canonical_url=canonical_url,
+            )
+
+    if translate:
+        embed = await translate_embed(embed, ("title", "description"))
 
     return Response(
         content=generate_html(embed),
