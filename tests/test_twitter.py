@@ -1,3 +1,4 @@
+import json
 from datetime import UTC
 from datetime import datetime
 from ipaddress import ip_address
@@ -5,6 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 
+from gallery_dl.extractor.message import Message
 from litestar.testing import TestClient
 
 import e.twitter as twitter_module
@@ -14,6 +16,7 @@ from e.twitter import Embed
 from e.twitter import Media
 from e.twitter import build_embed
 from e.twitter import content_type_for
+from e.twitter import extract_data
 from e.twitter import generate_html
 from e.twitter import is_media_file
 from e.twitter import list_media_files
@@ -37,6 +40,30 @@ def test_content_type_for() -> None:
     assert content_type_for(Path("2.mp4")) == "video/mp4"
     assert content_type_for("3.webp") == "image/webp"
     assert content_type_for("unknown.bin") == "application/octet-stream"
+
+
+def test_extract_data() -> None:
+    """Test extracting tweet metadata and media from DataJob output."""
+    job_data = [
+        (Message.Directory, KWDICT),
+        (
+            Message.Url,
+            "https://nitter.net/pic/1.jpg",
+            {"filename": "1.jpg", "extension": "jpg", "num": 1},
+        ),
+    ]
+
+    meta, media = extract_data(job_data)
+
+    assert meta == KWDICT
+    assert media == [
+        {
+            "url": "https://nitter.net/pic/1.jpg",
+            "filename": "1.jpg",
+            "extension": "jpg",
+            "num": 1,
+        },
+    ]
 
 
 def test_is_media_file(tmp_dir: Path) -> None:
@@ -148,29 +175,60 @@ def test_generate_html_image_embed() -> None:
     assert "og:video" not in rendered
 
 
-def test_download_returns_metadata_and_files(monkeypatch: pytest.MonkeyPatch, tmp_dir: Path) -> None:
-    """Test that download runs gallery-dl and returns metadata and files."""
+def test_download_archives_metadata_and_returns_files(monkeypatch: pytest.MonkeyPatch, tmp_dir: Path) -> None:
+    """Test that download archives metadata and returns the media files."""
 
     class FakePathfmt:
-        kwdict = KWDICT
         directory = str(tmp_dir)
 
-    class FakeJob:
+    class FakeDataJob:
+        def __init__(self, url: str, *, file: object = None) -> None:
+            self.exception = None
+            self.data = [
+                (Message.Directory, KWDICT),
+                (
+                    Message.Url,
+                    "https://nitter.net/pic/1.jpg",
+                    {"filename": "1.jpg", "extension": "jpg", "num": 1},
+                ),
+            ]
+
+        def run(self) -> int:
+            return 0
+
+    class FakeDownloadJob:
         def __init__(self, url: str) -> None:
             self.pathfmt = FakePathfmt()
 
         def run(self) -> int:
             return 0
 
-    monkeypatch.setattr(twitter_module.job, "DownloadJob", FakeJob)
+    monkeypatch.setattr(twitter_module.job, "DataJob", FakeDataJob)
+    monkeypatch.setattr(twitter_module.job, "DownloadJob", FakeDownloadJob)
     (tmp_dir / "1.jpg").write_bytes(b"")
 
     result = twitter_module.download("https://nitter.net/DiscussingFilm/status/2086143411984208230")
 
     assert result is not None
-    kwdict, files = result
-    assert kwdict["author"]["name"] == "DiscussingFilm"
+    meta, files = result
+    assert meta["author"]["name"] == "DiscussingFilm"
     assert [path.name for path in files] == ["1.jpg"]
+
+    metadata_path = tmp_dir / "metadata.json"
+    assert metadata_path.exists()
+
+    archived = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert archived["author"]["name"] == "DiscussingFilm"
+    assert archived["media"] == [
+        {
+            "url": "https://nitter.net/pic/1.jpg",
+            "num": 1,
+            "filename": "1.jpg",
+            "extension": "jpg",
+        },
+    ]
+    assert archived["files"][0]["filename"] == "1.jpg"
+    assert archived["files"][0]["content_type"] == "image/jpeg"
 
 
 def _empty_ips() -> DiscordIPs:

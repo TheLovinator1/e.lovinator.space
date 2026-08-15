@@ -2,12 +2,14 @@
 
 Discord's link preview fetcher reads Open Graph and Twitter Card ``<meta>``
 tags.  Twitter/X serves no usable tags to Discord, so this module downloads a
-tweet (and its media) from a Nitter instance via gallery-dl and renders our own
-tags, including ``og:video`` for video tweets.
+tweet (and its media) from a Nitter instance via gallery-dl, archives the tweet
+metadata as ``metadata.json`` next to the media, and renders our own tags,
+including ``og:video`` for video tweets.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from ipaddress import IPv4Address
@@ -21,6 +23,7 @@ from urllib.parse import quote
 from anyio import to_thread
 from gallery_dl import config
 from gallery_dl import job
+from gallery_dl.extractor.message import Message
 from htpy import head
 from htpy import html
 from htpy import meta
@@ -208,18 +211,98 @@ def public_url(path: Path, base_url: str, media_root: Path = MEDIA_DIR) -> str:
     return f"{base_url.rstrip('/')}/media/{encoded}"
 
 
+def extract_data(
+    job_data: list[Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Extract tweet metadata and media from DataJob output.
+
+    Args:
+        job_data: The ``data`` list populated by ``gallery_dl.job.DataJob``.
+
+    Returns:
+        A tuple of the tweet metadata dictionary and the list of media items.
+
+    Raises:
+        RuntimeError: If the extractor returned no tweet metadata.
+    """
+    try:
+        meta = next(item[1] for item in job_data if item[0] == Message.Directory)
+    except StopIteration as exc:
+        msg = "Extractor returned no tweet metadata"
+        raise RuntimeError(msg) from exc
+
+    media_items = [{**item[2], "url": item[1]} for item in job_data if item[0] == Message.Url]
+
+    return meta, media_items
+
+
+def write_metadata(path: Path, metadata: dict[str, Any]) -> None:
+    """Archive tweet metadata as JSON on disk.
+
+    Args:
+        path: Path of the JSON file to write.
+        metadata: The tweet metadata to archive.
+    """
+    content = json.dumps(
+        metadata,
+        default=str,
+        indent=2,
+        ensure_ascii=False,
+    )
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+
+
+def _download_directory(download_job: job.DownloadJob) -> Path | None:
+    """Return the directory gallery-dl downloaded into.
+
+    Args:
+        download_job: The completed download job.
+
+    Returns:
+        The download directory, or ``None`` if no directory was set.
+    """
+    pathfmt = download_job.pathfmt
+    if pathfmt is None or not pathfmt.directory:
+        return None
+
+    # gallery-dl's PathFormat is untyped, so Pylance infers ``directory`` as a
+    # broad union of types. It is always a string path at runtime.
+    return Path(str(pathfmt.directory))
+
+
 def download(nitter_url: str) -> tuple[dict[str, Any], list[Path]] | None:
-    """Download a tweet's media via gallery-dl.
+    """Download a tweet's media and archive its metadata.
 
     Args:
         nitter_url: URL of the tweet on a Nitter instance.
 
     Returns:
-        A tuple of the tweet metadata keyword dictionary and the list of
-        downloaded media file paths, or ``None`` if nothing was returned.
+        A tuple of the tweet metadata and the list of downloaded media file
+        paths, or ``None`` if nothing was returned.
     """
     configure_extractor()
 
+    # Extract the tweet metadata without downloading anything.
+    data_job = job.DataJob(nitter_url, file=None)
+    data_job.run()
+
+    if data_job.exception is not None:
+        logger.warning(
+            "gallery-dl failed to extract {}: {}",
+            nitter_url,
+            data_job.exception,
+        )
+        return None
+
+    if not data_job.data:
+        logger.warning("gallery-dl returned no data for {}", nitter_url)
+        return None
+
+    meta, media_items = extract_data(data_job.data)
+
+    # Download the media files (including video conversion via yt-dlp).
     download_job = job.DownloadJob(nitter_url)
     status = download_job.run()
 
@@ -230,17 +313,24 @@ def download(nitter_url: str) -> tuple[dict[str, Any], list[Path]] | None:
             nitter_url,
         )
 
-    pathfmt = download_job.pathfmt
-    if pathfmt is None or not pathfmt.kwdict:
-        logger.warning("gallery-dl returned no data for {}", nitter_url)
-        return None
+    directory = _download_directory(download_job)
+    files = list_media_files(directory) if directory is not None else []
 
-    # gallery-dl's PathFormat is untyped, so Pylance infers ``directory`` as a
-    # broad union of types. It is always a string path at runtime.
-    directory = Path(str(pathfmt.directory))
-    files = list_media_files(directory)
+    # Archive the tweet data so it can be read without re-fetching Nitter.
+    meta["media"] = [{key: item.get(key) for key in ("url", "num", "filename", "extension")} for item in media_items]
+    meta["files"] = [
+        {
+            "filename": path.name,
+            "path": str(path.resolve()),
+            "content_type": content_type_for(path),
+        }
+        for path in files
+    ]
 
-    return pathfmt.kwdict, files
+    if directory is not None:
+        write_metadata(directory / "metadata.json", meta)
+
+    return meta, files
 
 
 async def download_async(
@@ -258,17 +348,17 @@ async def download_async(
 
 
 def build_embed(
-    kwdict: dict[str, Any],
+    meta: dict[str, Any],
     files: list[Path],
     *,
     base_url: str,
     canonical_url: str,
     media_root: Path = MEDIA_DIR,
 ) -> Embed:
-    """Build an embed from gallery-dl metadata and downloaded files.
+    """Build an embed from tweet metadata and downloaded files.
 
     Args:
-        kwdict: The metadata keyword dictionary from gallery-dl.
+        meta: The tweet metadata from gallery-dl.
         files: The downloaded media files.
         base_url: The public base URL of this service.
         canonical_url: The canonical URL of the original tweet.
@@ -277,13 +367,13 @@ def build_embed(
     Returns:
         An embed ready to render as Open Graph HTML.
     """
-    author = kwdict.get("author") or kwdict.get("user") or {}
+    author = meta.get("author") or meta.get("user") or {}
     name = str(author.get("name") or "").strip() or "Twitter"
     username = str(author.get("nick") or "").strip()
 
     title = f"{name} ({username})" if username else name
 
-    description = HTMLParser(str(kwdict.get("content") or "")).text(
+    description = HTMLParser(str(meta.get("content") or "")).text(
         separator=" ",
         strip=True,
     )
@@ -490,9 +580,9 @@ async def twitter(
             media=(),
         )
     else:
-        kwdict, files = result
+        meta, files = result
         embed = build_embed(
-            kwdict,
+            meta,
             files,
             base_url=base_url_for(request),
             canonical_url=canonical_url,
