@@ -19,8 +19,13 @@ dependencies = [
     "wreq>=0.12.1",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
 [project.scripts]
-e = "e:main"
+e = "e.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]
@@ -99,5 +104,6 @@ lint.ignore = [
 [tool.uv.sources]
 gallery-dl = { url = "https://codeberg.org/mikf/gallery-dl/archive/master.tar.gz" }
 
-[dependency-groups]
-dev = ["pytest>=9.1.1"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:cacheprovider"

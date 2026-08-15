@@ -1,76 +1,98 @@
-import json
+"""Twitter/X embeds powered by gallery-dl and a Nitter instance.
+
+Discord's link preview fetcher reads Open Graph and Twitter Card ``<meta>``
+tags.  Twitter/X serves no usable tags to Discord, so this module downloads a
+tweet (and its media) from a Nitter instance via gallery-dl and renders our own
+tags, including ``og:video`` for video tweets.
+"""
+
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass
 from ipaddress import IPv4Address
-from ipaddress import IPv4Network
 from ipaddress import IPv6Address
 from ipaddress import ip_address
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import Annotated
 from typing import Any
+from urllib.parse import quote
 
-import niquests
+from anyio import to_thread
 from gallery_dl import config
 from gallery_dl import job
+from htpy import head
+from htpy import html
+from htpy import meta
 from litestar import Request
 from litestar import get
+from litestar.params import PathParameter
 from litestar.response import Redirect
+from litestar.response import Response
 from loguru import logger
-from platformdirs import PlatformDirs
+from selectolax.parser import HTMLParser
 
 from e.discord import DiscordIPs
-from e.discord import Prefix
-from e.discord import Service
 from e.discord import get_discord_ips
+from e.settings import ARCHIVE_PATH
+from e.settings import MEDIA_DIR
+from e.settings import NITTER_INSTANCE
+from e.settings import ORIGINAL_URL
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    from litestar.datastructures import Address
-
-import anyio
-from anyio import to_thread
-
-dirs: PlatformDirs = PlatformDirs(
-    appauthor="TheLovinator",
-    appname="e",
-    ensure_exists=True,
-    roaming=True,
-)
-
-DATADIR: Path = dirs.user_data_path
-ARCHIVE_PATH: Path = DATADIR / "twitter.sqlite3"
-BASE_DIRECTORY: Path = DATADIR / "Twitter" / "Downloads"
-
-BASE_DIRECTORY.mkdir(parents=True, exist_ok=True)
-
-MAX_CONCURRENT_DOWNLOADS = 8
-REQUEST_TIMEOUT = 30
+CONTENT_TYPES: dict[str, str] = {
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "png": "image/png",
+    "webp": "image/webp",
+    "gif": "image/gif",
+    "mp4": "video/mp4",
+    "webm": "video/webm",
+    "mov": "video/quicktime",
+    "m4v": "video/mp4",
+    "mp3": "audio/mpeg",
+}
+"""Mapping of file extensions to MIME types."""
 
 
 @dataclass(frozen=True, slots=True)
-class Download:
-    """A file to download."""
+class Media:
+    """A media file belonging to a tweet."""
 
     url: str
-    path: Path
+    """Absolute public URL the file is served from."""
+
+    content_type: str
+    """MIME type of the file."""
+
+    @property
+    def is_video(self) -> bool:
+        """Whether the file is a video."""
+        return self.content_type.startswith("video/")
 
 
-def sanitize_path_component(value: str) -> str:
-    """Make a string safe to use as a single filesystem path component."""
-    value = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", value)
-    value = value.strip(" .")
+@dataclass(frozen=True, slots=True)
+class Embed:
+    """Everything needed to render an Open Graph embed page."""
 
-    return value or "unknown"
+    title: str
+    """Embed title."""
+
+    description: str
+    """Embed description (the tweet text)."""
+
+    url: str
+    """Canonical URL of the original tweet."""
+
+    media: tuple[Media, ...]
+    """Media files to embed."""
 
 
 def configure_extractor() -> None:
-    """Configure the Nitter extractor."""
-    config.load()
-
+    """Configure gallery-dl's Nitter extractor."""
     config.set(
         path=("extractor",),
         key="base-directory",
-        value=BASE_DIRECTORY,
+        value=str(MEDIA_DIR),
     )
     config.set(
         path=("extractor", "nitter"),
@@ -81,6 +103,11 @@ def configure_extractor() -> None:
         path=("extractor", "nitter"),
         key="retweets",
         value=True,
+    )
+    config.set(
+        path=("extractor", "nitter"),
+        key="videos",
+        value="ytdl",
     )
     config.set(
         path=("extractor", "nitter"),
@@ -102,236 +129,376 @@ def configure_extractor() -> None:
         key="archive-pragma",
         value=["journal_mode=WAL", "synchronous=NORMAL"],
     )
-    config.set(
-        path=("extractor", "nitter"),
-        key="postprocessors",
-        value=[
-            {
-                "name": "metadata",
-                "mode": "json",
-            },
+
+
+def content_type_for(filename: str | Path) -> str:
+    """Return the MIME type for a media filename.
+
+    Args:
+        filename: The media filename or path.
+
+    Returns:
+        The MIME type, or ``application/octet-stream`` for unknown types.
+    """
+    extension = Path(filename).suffix.lower().lstrip(".")
+    return CONTENT_TYPES.get(extension, "application/octet-stream")
+
+
+def is_media_file(path: Path) -> bool:
+    """Whether a path is a supported media file.
+
+    Args:
+        path: The path to check.
+
+    Returns:
+        ``True`` if the file has a supported media extension.
+    """
+    return path.is_file() and path.suffix.lower().lstrip(".") in CONTENT_TYPES
+
+
+def _file_sort_key(path: Path) -> tuple[int, str]:
+    """Return a sort key that orders ``1.mp4`` before ``10.mp4``.
+
+    Args:
+        path: The media file path.
+
+    Returns:
+        A tuple of the numeric prefix and the filename.
+    """
+    match = re.match(r"^(\d+)", path.stem)
+    if match:
+        return (int(match.group(1)), path.name)
+    return (10**9, path.name)
+
+
+def list_media_files(directory: Path) -> list[Path]:
+    """List the media files in a download directory in original order.
+
+    Args:
+        directory: The directory gallery-dl downloaded into.
+
+    Returns:
+        The media files sorted by their numeric prefix.
+    """
+    if not directory.is_dir():
+        return []
+    return sorted(
+        (path for path in directory.iterdir() if is_media_file(path)),
+        key=_file_sort_key,
+    )
+
+
+def public_url(path: Path, base_url: str, media_root: Path = MEDIA_DIR) -> str:
+    """Build the public URL for a downloaded media file.
+
+    Args:
+        path: The local path of the media file.
+        base_url: The public base URL of this service.
+        media_root: The directory the media route serves.
+
+    Returns:
+        The absolute public URL for the file.
+    """
+    try:
+        relative = path.resolve().relative_to(media_root.resolve())
+    except ValueError:
+        relative = Path(path.name)
+
+    encoded = "/".join(quote(part) for part in relative.parts)
+    return f"{base_url.rstrip('/')}/media/{encoded}"
+
+
+def download(nitter_url: str) -> tuple[dict[str, Any], list[Path]] | None:
+    """Download a tweet's media via gallery-dl.
+
+    Args:
+        nitter_url: URL of the tweet on a Nitter instance.
+
+    Returns:
+        A tuple of the tweet metadata keyword dictionary and the list of
+        downloaded media file paths, or ``None`` if nothing was returned.
+    """
+    configure_extractor()
+
+    download_job = job.DownloadJob(nitter_url)
+    status = download_job.run()
+
+    if status:
+        logger.warning(
+            "gallery-dl finished with status {} for {}",
+            status,
+            nitter_url,
+        )
+
+    pathfmt = download_job.pathfmt
+    if pathfmt is None or not pathfmt.kwdict:
+        logger.warning("gallery-dl returned no data for {}", nitter_url)
+        return None
+
+    # gallery-dl's PathFormat is untyped, so Pylance infers ``directory`` as a
+    # broad union of types. It is always a string path at runtime.
+    directory = Path(str(pathfmt.directory))
+    files = list_media_files(directory)
+
+    return pathfmt.kwdict, files
+
+
+async def download_async(
+    nitter_url: str,
+) -> tuple[dict[str, Any], list[Path]] | None:
+    """Download a tweet's media without blocking the event loop.
+
+    Args:
+        nitter_url: URL of the tweet on a Nitter instance.
+
+    Returns:
+        The same result as :func:`download`.
+    """
+    return await to_thread.run_sync(download, nitter_url)
+
+
+def build_embed(
+    kwdict: dict[str, Any],
+    files: list[Path],
+    *,
+    base_url: str,
+    canonical_url: str,
+    media_root: Path = MEDIA_DIR,
+) -> Embed:
+    """Build an embed from gallery-dl metadata and downloaded files.
+
+    Args:
+        kwdict: The metadata keyword dictionary from gallery-dl.
+        files: The downloaded media files.
+        base_url: The public base URL of this service.
+        canonical_url: The canonical URL of the original tweet.
+        media_root: The directory the media route serves.
+
+    Returns:
+        An embed ready to render as Open Graph HTML.
+    """
+    author = kwdict.get("author") or kwdict.get("user") or {}
+    name = str(author.get("name") or "").strip() or "Twitter"
+    username = str(author.get("nick") or "").strip()
+
+    title = f"{name} ({username})" if username else name
+
+    description = HTMLParser(str(kwdict.get("content") or "")).text(
+        separator=" ",
+        strip=True,
+    )
+
+    media = tuple(
+        Media(
+            url=public_url(path, base_url, media_root),
+            content_type=content_type_for(path),
+        )
+        for path in files
+    )
+
+    return Embed(
+        title=title,
+        description=description,
+        url=canonical_url,
+        media=media,
+    )
+
+
+def generate_html(embed: Embed) -> str:
+    """Render an Open Graph embed page for a tweet.
+
+    Args:
+        embed: The embed data to render.
+
+    Returns:
+        A complete HTML document.
+    """
+    videos = [media for media in embed.media if media.is_video]
+    images = [media for media in embed.media if not media.is_video]
+
+    tags = [
+        meta(name="theme-color", content="#1d9bf0"),
+        meta(property="og:type", content="video.other" if videos else "article"),
+        meta(property="og:site_name", content="e.lovinator.space"),
+        meta(property="og:title", content=embed.title),
+        meta(property="og:description", content=embed.description),
+        meta(property="og:url", content=embed.url),
+        meta(
+            name="twitter:card",
+            content="player" if videos else "summary_large_image",
+        ),
+        meta(name="twitter:title", content=embed.title),
+        meta(name="twitter:description", content=embed.description),
+    ]
+
+    for image in images:
+        tags.extend(
+            [
+                meta(property="og:image", content=image.url),
+                meta(property="og:image:url", content=image.url),
+                meta(property="og:image:secure_url", content=image.url),
+                meta(name="twitter:image", content=image.url),
+            ],
+        )
+
+    for video in videos:
+        tags.extend(
+            [
+                meta(property="og:video", content=video.url),
+                meta(property="og:video:url", content=video.url),
+                meta(property="og:video:secure_url", content=video.url),
+                meta(property="og:video:type", content=video.content_type),
+                meta(name="twitter:player", content=video.url),
+                meta(name="twitter:player:stream", content=video.url),
+                meta(
+                    name="twitter:player:stream:content_type",
+                    content=video.content_type,
+                ),
+            ],
+        )
+
+    # Use the first image as the poster for video embeds.
+    if videos and images:
+        tags.extend(
+            [
+                meta(property="og:image", content=images[0].url),
+                meta(name="twitter:image", content=images[0].url),
+            ],
+        )
+
+    return str(
+        html[
+            head[
+                meta(name="viewport", content="width=device-width, initial-scale=1.0"),
+                *tags,
+            ],
         ],
     )
 
 
-def extract_data(
-    job_data: list[Any],
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Extract tweet metadata and media from extractor output."""
-    try:
-        meta = next(item[1] for item in job_data if item[0] == 2)
-    except StopIteration as exc:
-        msg = "Extractor returned no tweet metadata"
-        raise RuntimeError(msg) from exc
+def client_ip_from(request: Request) -> IPv4Address | IPv6Address | None:
+    """Extract the client IP address from a request.
 
-    media_items = [
-        {
-            "url": item[1],
-            **item[2],
-        }
-        for item in job_data
-        if item[0] == 3
-    ]
+    Args:
+        request: The incoming request.
 
-    return meta, media_items
-
-
-def create_downloads(
-    media_items: list[dict[str, Any]],
-    target_dir: Path,
-) -> list[Download]:
-    """Create download targets for extracted media."""
-    downloads: list[Download] = []
-
-    for index, item in enumerate(media_items, start=1):
-        extension = str(item["extension"]).lstrip(".").lower()
-        number = item.get("num", index)
-
-        path = target_dir / f"{number}.{extension}"
-
-        downloads.append(
-            Download(
-                url=str(item["url"]),
-                path=path,
-            ),
-        )
-
-    return downloads
-
-
-async def download_file(
-    session: niquests.AsyncSession,
-    download: Download,
-    limiter: anyio.CapacityLimiter,
-) -> None:
-    """Download one file."""
-    async with limiter:
-        logger.info(
-            "Downloading %s to %s",
-            download.url,
-            download.path,
-        )
-
-        response: niquests.Response = await session.get(
-            download.url,
-            timeout=REQUEST_TIMEOUT,
-        )
-        response.raise_for_status()
-        content: bytes | None = response.content
-        if content is None:
-            msg: str = f"No content received from {download.url}"
-            raise RuntimeError(msg)
-
-        await anyio.Path(download.path).write_bytes(content)
-
-
-async def download_files(
-    downloads: list[Download],
-) -> None:
-    """Download files concurrently with bounded concurrency."""
-    limiter = anyio.CapacityLimiter(MAX_CONCURRENT_DOWNLOADS)
-
-    async with niquests.AsyncSession() as session, anyio.create_task_group() as task_group:
-        for download in downloads:
-            task_group.start_soon(
-                download_file,
-                session,
-                download,
-                limiter,
-            )
-
-
-async def write_metadata(
-    path: Path,
-    metadata: dict[str, Any],
-) -> None:
-    """Write metadata JSON."""
-    content = json.dumps(
-        metadata,
-        default=str,
-        indent=2,
-        ensure_ascii=False,
-    )
-
-    await anyio.Path(path).write_text(
-        content,
-        encoding="utf-8",
-    )
-
-
-async def download(url: str) -> Path | None:
-    """Download a tweet and its media."""
-    configure_extractor()
-
-    data_job = job.DataJob(url)
-
-    # DataJob.run() is synchronous, so don't block the event loop.
-    await to_thread.run_sync(data_job.run)
-
-    job_data = data_job.data
-
-    if not job_data:
-        logger.warning("No data returned for %s", url)
+    Returns:
+        The client IP address, or ``None`` if it is missing or invalid.
+    """
+    client = request.client
+    if client is None:
         return None
 
-    meta, media_items = extract_data(job_data)
+    try:
+        return ip_address(client.host)
+    except ValueError:
+        return None
 
-    author = meta.get("author", {}).get("name") or meta.get("user", {}).get("name") or "unknown"
-    author = sanitize_path_component(str(author))
 
-    tweet_id = sanitize_path_component(str(meta["tweet_id"]))
+def is_discord_ip(
+    client_ip: IPv4Address | IPv6Address,
+    ips: DiscordIPs,
+) -> bool:
+    """Check whether an IP address belongs to Discord.
 
-    target_dir = BASE_DIRECTORY / author / tweet_id
-    target_dir.mkdir(parents=True, exist_ok=True)
+    Args:
+        client_ip: The client IP address.
+        ips: The Discord IP ranges.
 
-    downloads = create_downloads(media_items, target_dir)
+    Returns:
+        ``True`` if the IP is within one of the Discord ranges.
+    """
+    return any(isinstance(client_ip, IPv4Address) and client_ip in prefix.ipv4_prefix for prefix in ips.prefixes)
 
-    await download_files(downloads)
 
-    downloaded_files = [
-        {
-            "url": download.url,
-            "filename": download.path.name,
-            "path": str(download.path.resolve()),
-        }
-        for download in downloads
-    ]
+async def is_discord_client(
+    client_ip: IPv4Address | IPv6Address,
+) -> bool:
+    """Check whether a client IP belongs to Discord (or localhost).
 
-    meta["files"] = downloaded_files
+    Args:
+        client_ip: The client IP address.
 
-    json_path = target_dir / "metadata.json"
-    await write_metadata(json_path, meta)
+    Returns:
+        ``True`` if the client is Discord or the loopback address.
+    """
+    if client_ip.is_loopback:
+        return True
 
-    return json_path
+    ips = await get_discord_ips()
+    return is_discord_ip(client_ip, ips)
+
+
+def base_url_for(request: Request) -> str:
+    """Return the public base URL for the current request.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        The scheme and host of the request without a trailing slash.
+    """
+    return str(request.base_url).rstrip("/")
 
 
 @get("/{username:str}/status/{tweet_id:str}")
-async def twitter(request: Request, username: str, tweet_id: str) -> dict[str, Any] | Redirect:
-    """Handle Twitter requests.
+async def twitter(
+    request: Request,
+    username: Annotated[str, PathParameter()],
+    tweet_id: Annotated[str, PathParameter()],
+) -> Response | Redirect:
+    """Serve an Open Graph embed for a tweet to Discord clients.
 
-    https://twitter.com/DiscussingFilm/status/2086143411984208230
-    https://x.com/DiscussingFilm/status/2086143411984208230
-    https://nitter.net/DiscussingFilm/status/2086143411984208230
-
-    https://e.lovinator.space/DiscussingFilm/status/2086143411984208230
-
-    If IP is from Discord:
-        Download the image/video.
-        Return custom HTML with metadata tags with the image/video.
-
-    Otherwise:
-        Redirect to the original URL.
+    Non-Discord clients are redirected to the original tweet on X.
 
     Args:
-        request: The request.
-        username: The Twitter handle.
+        request: The incoming request.
+        username: The Twitter/X handle.
         tweet_id: The status ID of the tweet.
 
     Returns:
-        Redirect to the original URL, or custom HTML with metadata tags.
+        A redirect for non-Discord clients, or an HTML embed page.
 
     Raises:
-        ValueError: If client address is missing.
+        ValueError: If the client address is missing.
     """
-    logger.info(f"Request for {request.url!r} from {request.client}")
-    logger.info("Username: {}, Tweet ID: {}", username, tweet_id)
+    logger.info("Request for {} from {}", request.url, request.client)
 
-    client: Address | None = request.client
-    if client is None:
+    client_ip = client_ip_from(request)
+    if client_ip is None:
         msg = "No client address"
         raise ValueError(msg)
 
-    ips: DiscordIPs = await get_discord_ips()
-
-    # Append ["127.0.0.1"] for local testing.
-    ips.prefixes.append(Prefix(ipv4Prefix=IPv4Network("127.0.0.1"), services=[Service("api"), Service("media")]))
-
-    client_ip: IPv4Address | IPv6Address = ip_address(client.host)
-
-    for ip in ips.prefixes:
-        if client_ip in ip.ipv4_prefix:
-            logger.info("Client IP {} is in Discord IPs", client.host)
-            break
-    else:
-        logger.warning("Client IP {} is not in Discord IPs", client.host)
+    if not await is_discord_client(client_ip):
         return Redirect(
-            path=f"https://twitter.com/{username}/status/{tweet_id}",
+            path=f"{ORIGINAL_URL}/{username}/status/{tweet_id}",
             status_code=302,
         )
 
-    logger.info("Client IP {} is in Discord IPs", client.host)
+    canonical_url = f"{ORIGINAL_URL}/{username}/status/{tweet_id}"
+    nitter_url = f"{NITTER_INSTANCE}/{username}/status/{tweet_id}"
+    logger.info("Fetching tweet from Nitter: {}", nitter_url)
 
-    nitter_url = f"https://nitter.net/{username}/status/{tweet_id}"
-    logger.info("Getting tweet from Nitter: {}", nitter_url)
+    result = await download_async(nitter_url)
 
-    tweet = download(url=nitter_url)
+    if result is None:
+        logger.warning("No data returned for {}", nitter_url)
+        embed = Embed(
+            title=f"@{username}",
+            description="",
+            url=canonical_url,
+            media=(),
+        )
+    else:
+        kwdict, files = result
+        embed = build_embed(
+            kwdict,
+            files,
+            base_url=base_url_for(request),
+            canonical_url=canonical_url,
+        )
 
-    logger.info(tweet)
-
-    return {
-        "url": f"https://twitter.com/{username}/status/{tweet_id}",
-        "nitter_url": nitter_url,
-        "e_url": str(request.url),
-        "username": username,
-        "tweet_id": tweet_id,
-    }
+    return Response(
+        content=generate_html(embed),
+        media_type="text/html",
+    )
