@@ -175,10 +175,22 @@ def build_embed(
     title = str(meta.get("title") or "").strip() or "Reddit"
     description = str(meta.get("selftext") or "").strip()
 
+    reddit_video = (meta.get("secure_media") or {}).get("reddit_video") or {}
+    width = reddit_video.get("width")
+    height = reddit_video.get("height")
+
+    poster = None
+    try:
+        poster = meta["preview"]["images"][0]["source"]["url"]
+    except KeyError, IndexError, TypeError:
+        poster = meta.get("thumbnail")
+
     media = tuple(
         Media(
             url=public_url(path, base_url, media_root),
             content_type=content_type_for(path),
+            width=width if content_type_for(path).startswith("video/") else None,
+            height=height if content_type_for(path).startswith("video/") else None,
         )
         for path in files
     )
@@ -188,6 +200,7 @@ def build_embed(
         description=description,
         url=canonical_url,
         media=media,
+        poster=poster,
     )
 
 

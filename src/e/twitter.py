@@ -58,6 +58,12 @@ class Media:
     content_type: str
     """MIME type of the file."""
 
+    width: int | None = None
+    """Pixel width, used for video player embeds."""
+
+    height: int | None = None
+    """Pixel height, used for video player embeds."""
+
     @property
     def is_video(self) -> bool:
         """Whether the file is a video."""
@@ -79,6 +85,9 @@ class Embed:
 
     media: tuple[Media, ...]
     """Media files to embed."""
+
+    poster: str | None = None
+    """Thumbnail URL shown for video embeds."""
 
 
 def configure_extractor() -> None:
@@ -422,30 +431,31 @@ def generate_html(embed: Embed) -> str:
             ],
         )
 
-    for video in videos:
+    # Discord plays videos through a "player" embed: an iframe pointed at the
+    # raw file. That requires og:video:type=text/html plus explicit dimensions.
+    if videos:
+        video = videos[0]
+        width = video.width or 1280
+        height = video.height or 720
         tags.extend(
             [
-                meta(property="og:video", content=video.url),
-                meta(property="og:video:url", content=video.url),
-                meta(property="og:video:secure_url", content=video.url),
-                meta(property="og:video:type", content=video.content_type),
                 meta(name="twitter:player", content=video.url),
-                meta(name="twitter:player:stream", content=video.url),
-                meta(
-                    name="twitter:player:stream:content_type",
-                    content=video.content_type,
-                ),
+                meta(name="twitter:player:width", content=str(width)),
+                meta(name="twitter:player:height", content=str(height)),
+                meta(property="og:video:type", content="text/html"),
+                meta(property="og:video:width", content=str(width)),
+                meta(property="og:video:height", content=str(height)),
             ],
         )
 
-    # Use the first image as the poster for video embeds.
-    if videos and images:
-        tags.extend(
-            [
-                meta(property="og:image", content=images[0].url),
-                meta(name="twitter:image", content=images[0].url),
-            ],
-        )
+        poster = embed.poster or (images[0].url if images else None)
+        if poster:
+            tags.extend(
+                [
+                    meta(property="og:image", content=poster),
+                    meta(name="twitter:image", content=poster),
+                ],
+            )
 
     return str(
         html[

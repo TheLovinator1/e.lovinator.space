@@ -78,6 +78,35 @@ def test_build_embed(tmp_dir: Path) -> None:
     assert embed.media[0].content_type == "image/jpeg"
 
 
+def test_build_embed_video_extracts_dimensions_and_poster(tmp_dir: Path) -> None:
+    """Test that a Reddit video embed carries player dimensions and a poster."""
+    video = tmp_dir / "1.mp4"
+    video.write_bytes(b"")
+
+    meta = {
+        **REDDIT_META,
+        "secure_media": {"reddit_video": {"width": 480, "height": 706}},
+        "preview": {
+            "images": [
+                {"source": {"url": "https://preview.redd.it/abc.png"}},
+            ],
+        },
+    }
+
+    embed = build_embed(
+        meta,
+        [video],
+        base_url="https://e.lovinator.space",
+        canonical_url="https://www.reddit.com/r/aww/comments/abc123",
+        media_root=tmp_dir,
+    )
+
+    assert embed.media[0].content_type == "video/mp4"
+    assert embed.media[0].width == 480
+    assert embed.media[0].height == 706
+    assert embed.poster == "https://preview.redd.it/abc.png"
+
+
 def test_download_archives_metadata_and_returns_files(monkeypatch: pytest.MonkeyPatch, tmp_dir: Path) -> None:
     """Test that download archives metadata and returns the media files."""
 

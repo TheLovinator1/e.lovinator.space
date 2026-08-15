@@ -133,7 +133,7 @@ def test_build_embed(tmp_dir: Path) -> None:
 
 
 def test_generate_html_video_embed() -> None:
-    """Test that a video embed renders og:video and player card tags."""
+    """Test that a video embed renders a player card with iframe dimensions."""
     embed = Embed(
         title="DiscussingFilm (@DiscussingFilm)",
         description="A video.",
@@ -148,10 +148,11 @@ def test_generate_html_video_embed() -> None:
 
     rendered = generate_html(embed)
 
-    assert 'property="og:video" content="https://e.lovinator.space/media/1.mp4"' in rendered
-    assert 'property="og:video:type" content="video/mp4"' in rendered
     assert 'name="twitter:card" content="player"' in rendered
-    assert 'name="twitter:player:stream" content="https://e.lovinator.space/media/1.mp4"' in rendered
+    assert 'name="twitter:player" content="https://e.lovinator.space/media/1.mp4"' in rendered
+    assert 'property="og:video:type" content="text/html"' in rendered
+    assert 'property="og:video:width" content="1280"' in rendered
+    assert 'property="og:video:height" content="720"' in rendered
 
 
 def test_generate_html_image_embed() -> None:
@@ -258,7 +259,7 @@ def test_route_returns_embed_for_discord(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
-    assert 'property="og:video"' in response.text
+    assert 'name="twitter:player"' in response.text
     assert "/media/1.mp4" in response.text
 
 
