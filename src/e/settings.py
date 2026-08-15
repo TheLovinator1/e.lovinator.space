@@ -62,14 +62,17 @@ REDDIT_ARCHIVE_PATH: Path = DATA_DIR / "reddit.sqlite3"
 MEDIA_ROUTE: str = "/media"
 """Route prefix under which downloaded media files are served."""
 
-OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY")
-"""OpenAI API key used to translate embeds into English.
+DEEPSEEK_API_KEY: str | None = os.getenv("DEEPSEEK_API_KEY")
+"""DeepSeek API key used to translate embeds into English.
 
 When unset, ``/en`` routes serve the untranslated text.
 """
 
-OPENAI_TRANSLATION_MODEL: str = os.getenv("OPENAI_TRANSLATION_MODEL", "gpt-4o-mini")
-"""OpenAI model used to translate embeds into English."""
+DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+"""Base URL of the DeepSeek API (OpenAI-compatible)."""
+
+DEEPSEEK_TRANSLATION_MODEL: str = os.getenv("DEEPSEEK_TRANSLATION_MODEL", "deepseek-v4-pro")
+"""DeepSeek model used to translate embeds into English."""
 
 TRANSLATIONS_PATH: Path = DATA_DIR / "translations.json"
 """On-disk cache of past translations, keyed by the source text."""

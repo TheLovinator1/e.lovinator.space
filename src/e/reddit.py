@@ -397,7 +397,7 @@ async def reddit_en(
     """Serve an English-translated Open Graph embed for a Reddit post.
 
     Like :func:`reddit`, but the post title and text are translated into
-    English with OpenAI before the embed is rendered.
+    English with DeepSeek before the embed is rendered.
 
     Args:
         request: The incoming request.

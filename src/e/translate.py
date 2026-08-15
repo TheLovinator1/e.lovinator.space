@@ -1,4 +1,4 @@
-"""Translate embed text into English with OpenAI."""
+"""Translate embed text into English with DeepSeek."""
 
 from __future__ import annotations
 
@@ -11,8 +11,9 @@ from anyio import to_thread
 from loguru import logger
 from openai import OpenAI
 
-from e.settings import OPENAI_API_KEY
-from e.settings import OPENAI_TRANSLATION_MODEL
+from e.settings import DEEPSEEK_API_KEY
+from e.settings import DEEPSEEK_BASE_URL
+from e.settings import DEEPSEEK_TRANSLATION_MODEL
 from e.settings import TRANSLATIONS_PATH
 
 if TYPE_CHECKING:
@@ -30,7 +31,11 @@ SYSTEM_PROMPT = (
 
 
 class _Translator:
-    """Translator with a lazy OpenAI client and an on-disk cache."""
+    """Translator with a lazy DeepSeek client and an on-disk cache.
+
+    DeepSeek exposes an OpenAI-compatible API, so the OpenAI SDK is used with
+    DeepSeek's base URL.
+    """
 
     def __init__(self, *, cache_path: Path = TRANSLATIONS_PATH) -> None:
         """Initialize the translator.
@@ -93,18 +98,18 @@ class _Translator:
             return cached
 
         client = self._client
-        if client is None and OPENAI_API_KEY:
-            client = OpenAI(api_key=OPENAI_API_KEY, base_url="https://api.deepseek.com")
+        if client is None and DEEPSEEK_API_KEY:
+            client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL)
             self._client = client
         if client is None:
             if not self._warned_missing_key:
-                logger.warning("OPENAI_API_KEY is not set; /en routes will serve untranslated text")
+                logger.warning("DEEPSEEK_API_KEY is not set; /en routes will serve untranslated text")
                 self._warned_missing_key = True
             return text
 
         try:
             completion = client.chat.completions.create(
-                model=OPENAI_TRANSLATION_MODEL,
+                model=DEEPSEEK_TRANSLATION_MODEL,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": text},
@@ -112,7 +117,7 @@ class _Translator:
                 temperature=0,
             )
         except Exception as exc:  # ruff: ignore[blind-except] - translation must never break embeds
-            logger.warning("OpenAI translation failed: {}", exc)
+            logger.warning("DeepSeek translation failed: {}", exc)
             return text
 
         translated = (completion.choices[0].message.content or "").strip()

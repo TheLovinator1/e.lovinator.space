@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 
 def _fake_client(content: str) -> SimpleNamespace:
-    """Build a fake OpenAI client returning ``content`` from chat completions.
+    """Build a fake DeepSeek client returning ``content`` from chat completions.
 
     Args:
         content: The translation the fake model should return.
@@ -41,7 +41,7 @@ def test_translate_text_returns_original_without_api_key(
 ) -> None:
     """Test that texts are returned unchanged when no API key is configured."""
     translator = translate_module._Translator(cache_path=tmp_dir / "translations.json")
-    monkeypatch.setattr(translate_module, "OPENAI_API_KEY", None)
+    monkeypatch.setattr(translate_module, "DEEPSEEK_API_KEY", None)
 
     assert translator.translate_text("Hallå världen") == "Hallå världen"
     assert not (tmp_dir / "translations.json").exists()
@@ -50,7 +50,7 @@ def test_translate_text_returns_original_without_api_key(
 def test_translate_text_caches_translations(monkeypatch: pytest.MonkeyPatch, tmp_dir: Path) -> None:
     """Test that translations are cached on disk and reused."""
     cache_path = tmp_dir / "translations.json"
-    monkeypatch.setattr(translate_module, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(translate_module, "DEEPSEEK_API_KEY", "test-key")
 
     translator = translate_module._Translator(cache_path=cache_path)
     client = _fake_client("Hello world")
@@ -74,7 +74,7 @@ def test_translate_text_caches_translations(monkeypatch: pytest.MonkeyPatch, tmp
 def test_translate_text_handles_api_errors(monkeypatch: pytest.MonkeyPatch, tmp_dir: Path) -> None:
     """Test that API failures fall back to the original text."""
     translator = translate_module._Translator(cache_path=tmp_dir / "translations.json")
-    monkeypatch.setattr(translate_module, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(translate_module, "DEEPSEEK_API_KEY", "test-key")
 
     def create(**kwargs: object) -> object:
         msg = "API is down"
@@ -92,7 +92,7 @@ def test_translate_text_returns_original_when_model_returns_nothing(
 ) -> None:
     """Test that empty model responses fall back to the original text."""
     translator = translate_module._Translator(cache_path=tmp_dir / "translations.json")
-    monkeypatch.setattr(translate_module, "OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(translate_module, "DEEPSEEK_API_KEY", "test-key")
     monkeypatch.setattr(translator, "_client", _fake_client(""))
 
     assert translator.translate_text("Hallå världen") == "Hallå världen"

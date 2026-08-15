@@ -739,7 +739,7 @@ async def twitter_en(
     """Serve an English-translated Open Graph embed for a tweet.
 
     Like :func:`twitter`, but the tweet text is translated into English with
-    OpenAI before the embed is rendered.
+    DeepSeek before the embed is rendered.
 
     Args:
         request: The incoming request.
