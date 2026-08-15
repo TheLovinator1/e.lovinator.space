@@ -7,6 +7,7 @@ from ipaddress import ip_address
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import Self
 
 from gallery_dl import config
 from gallery_dl.extractor.message import Message
@@ -155,6 +156,59 @@ def test_download_archives_metadata_and_returns_files(monkeypatch: pytest.Monkey
     assert archived["files"][0]["filename"] == "1.jpg"
 
 
+def test_download_video_uses_fallback_url(monkeypatch: pytest.MonkeyPatch, tmp_dir: Path) -> None:
+    """Test that a Reddit video is downloaded from its direct fallback URL."""
+    monkeypatch.setattr(reddit_module, "REDDIT_MEDIA_DIR", tmp_dir)
+
+    meta = {
+        "subreddit": "aww",
+        "id": "abc123",
+        "title": "Cute puppy 12/08",
+        "secure_media": {"reddit_video": {"fallback_url": "https://v.redd.it/abc/CMAF_480.mp4"}},
+    }
+
+    class FakeDataJob:
+        def __init__(self, url: str, *, file: object = None) -> None:
+            self.exception = None
+            self.data = [
+                (Message.Directory, meta),
+                (Message.Url, "ytdl:https://v.redd.it/abc", {"filename": "abc", "extension": "mp4", "num": 0}),
+            ]
+
+        def run(self) -> int:
+            return 0
+
+    class FakeResponse:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def raise_for_status(self) -> None:
+            pass
+
+        def iter_content(self, chunk_size: int) -> list[bytes]:
+            return [b"video", b"-bytes"]
+
+    def fake_get(url: str, stream: bool, headers: dict[str, str]) -> FakeResponse:
+        assert url == "https://v.redd.it/abc/CMAF_480.mp4"
+        return FakeResponse()
+
+    monkeypatch.setattr(reddit_module.job, "DataJob", FakeDataJob)
+    monkeypatch.setattr(reddit_module.niquests, "get", fake_get)
+
+    result = reddit_module.download("https://www.reddit.com/r/aww/comments/abc123")
+
+    assert result is not None
+    _, files = result
+    assert [path.name for path in files] == ["abc123 Cute puppy 12_08.mp4"]
+    assert files[0].read_bytes() == b"video-bytes"
+
+    metadata_path = tmp_dir / "aww" / "abc123" / "metadata.json"
+    assert metadata_path.exists()
+
+
 def _empty_ips() -> DiscordIPs:
     return DiscordIPs(
         creationTime=datetime(2026, 8, 4, tzinfo=UTC),
@@ -172,10 +226,14 @@ def test_route_returns_embed_for_discord(monkeypatch: pytest.MonkeyPatch) -> Non
         lambda request: ip_address("127.0.0.1"),
     )
 
-    async def fake_download_async(reddit_url: str) -> tuple[dict[str, Any], list[Path]]:  # ruff: ignore[unused-async]
-        return REDDIT_META, [Path("1.jpg")]
+    async def fake_fetch_meta(reddit_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return dict(REDDIT_META), []
 
-    monkeypatch.setattr(reddit_module, "download_async", fake_download_async)
+    async def fake_download_media(reddit_url: str) -> tuple[Path | None, list[Path]]:  # ruff: ignore[unused-async]
+        return None, [Path("1.jpg")]
+
+    monkeypatch.setattr(reddit_module, "fetch_meta_async", fake_fetch_meta)
+    monkeypatch.setattr(reddit_module, "download_media_async", fake_download_media)
 
     with TestClient(app=app) as client:
         response = client.get("/r/aww/comments/abc123")
@@ -194,16 +252,64 @@ def test_route_with_slug_returns_embed_for_discord(monkeypatch: pytest.MonkeyPat
         lambda request: ip_address("127.0.0.1"),
     )
 
-    async def fake_download_async(reddit_url: str) -> tuple[dict[str, Any], list[Path]]:  # ruff: ignore[unused-async]
-        return REDDIT_META, [Path("1.jpg")]
+    async def fake_fetch_meta(reddit_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return dict(REDDIT_META), []
 
-    monkeypatch.setattr(reddit_module, "download_async", fake_download_async)
+    async def fake_download_media(reddit_url: str) -> tuple[Path | None, list[Path]]:  # ruff: ignore[unused-async]
+        return None, [Path("1.jpg")]
+
+    monkeypatch.setattr(reddit_module, "fetch_meta_async", fake_fetch_meta)
+    monkeypatch.setattr(reddit_module, "download_media_async", fake_download_media)
 
     with TestClient(app=app) as client:
         response = client.get("/r/aww/comments/abc123/cute_puppy")
 
     assert response.status_code == 200
     assert 'property="og:image"' in response.text
+
+
+def test_route_video_uses_fallback_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that a video embed points at Reddit's fallback URL immediately."""
+    monkeypatch.setattr(
+        reddit_module,
+        "client_ip_from",
+        lambda request: ip_address("127.0.0.1"),
+    )
+
+    meta = {
+        "subreddit": "aww",
+        "id": "abc123",
+        "title": "Cute puppy video",
+        "secure_media": {
+            "reddit_video": {
+                "fallback_url": "https://v.redd.it/abc/CMAF_480.mp4",
+                "width": 480,
+                "height": 706,
+            },
+        },
+        "preview": {"images": [{"source": {"url": "https://preview.redd.it/abc.png"}}]},
+    }
+
+    async def fake_fetch_meta(reddit_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return meta, []
+
+    calls: dict[str, str] = {}
+
+    def fake_background(
+        fallback_url: str, target: Path, meta: dict[str, Any], media_items: list[dict[str, Any]]
+    ) -> None:
+        calls["url"] = fallback_url
+
+    monkeypatch.setattr(reddit_module, "fetch_meta_async", fake_fetch_meta)
+    monkeypatch.setattr(reddit_module, "download_video_background", fake_background)
+
+    with TestClient(app=app) as client:
+        response = client.get("/r/aww/comments/abc123")
+
+    assert response.status_code == 200
+    assert 'property="og:video" content="https://v.redd.it/abc/CMAF_480.mp4"' in response.text
+    assert 'property="og:image" content="https://preview.redd.it/abc.png"' in response.text
+    assert calls["url"] == "https://v.redd.it/abc/CMAF_480.mp4"
 
 
 def test_route_redirects_non_discord(monkeypatch: pytest.MonkeyPatch) -> None:

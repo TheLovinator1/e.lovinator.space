@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 from typing import Annotated
 from typing import Any
 
+import niquests
 from anyio import to_thread
 from gallery_dl import config
 from gallery_dl import job
 from litestar import Request
 from litestar import get
+from litestar.background_tasks import BackgroundTask
 from litestar.params import PathParameter
 from litestar.response import Redirect
 from litestar.response import Response
@@ -77,51 +80,122 @@ def configure_extractor() -> None:
         )
 
 
-def download(reddit_url: str) -> tuple[dict[str, Any], list[Path]] | None:
-    """Download a Reddit post's media and archive its metadata.
+_INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
+
+
+def _fallback_url(meta: dict[str, Any]) -> str | None:
+    """Return the direct progressive MP4 URL for a Reddit video post.
+
+    Args:
+        meta: The post metadata from gallery-dl.
+
+    Returns:
+        The ``fallback_url`` (a single MP4 with audio), or ``None`` if the post
+        is not a v.redd.it video.
+    """
+    reddit_video = (meta.get("secure_media") or {}).get("reddit_video") or {}
+    return reddit_video.get("fallback_url")
+
+
+def _video_path(meta: dict[str, Any]) -> Path:
+    """Return the destination path for a video post's MP4.
+
+    The directory mirrors gallery-dl's ``{subreddit}/{id}`` layout and the
+    filename mirrors its ``{id} {title}.{extension}`` layout.
+
+    Args:
+        meta: The post metadata from gallery-dl.
+
+    Returns:
+        The absolute path the video should be stored at.
+    """
+    directory = REDDIT_MEDIA_DIR / str(meta.get("subreddit") or "") / str(meta.get("id") or "")
+    title = _INVALID_FILENAME_CHARS.sub("_", str(meta.get("title") or "").strip())
+    title = title.rstrip(". ")[:220] or "video"
+    return directory / f"{meta['id']} {title}.mp4"
+
+
+def _download_fallback(url: str, target: Path) -> Path:
+    """Download ``url`` to ``target``, skipping if it already exists.
+
+    Args:
+        url: The direct MP4 URL to download.
+        target: The destination file path.
+
+    Returns:
+        The destination path.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_file():
+        return target
+
+    partial = target.with_name(target.name + ".part")
+    try:
+        with niquests.get(url, stream=True, headers={"User-Agent": REDDIT_USER_AGENT}) as response:
+            response.raise_for_status()
+            with partial.open("wb") as file:
+                for chunk in response.iter_content(chunk_size=65536):
+                    file.write(chunk)
+        partial.replace(target)
+    finally:
+        partial.unlink(missing_ok=True)
+
+    return target
+
+
+def fetch_meta(reddit_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """Fetch a Reddit post's metadata without downloading its media.
 
     Args:
         reddit_url: URL of the post on Reddit.
 
     Returns:
-        A tuple of the post metadata and the list of downloaded media file
-        paths, or ``None`` if nothing was returned.
+        A tuple of the post metadata and the list of media items, or ``None``
+        if gallery-dl returned nothing.
     """
     configure_extractor()
 
-    # Extract the post metadata without downloading anything.
     data_job = job.DataJob(reddit_url, file=None)
     data_job.run()
 
     if data_job.exception is not None:
-        logger.warning(
-            "gallery-dl failed to extract {}: {}",
-            reddit_url,
-            data_job.exception,
-        )
+        logger.warning("gallery-dl failed to extract {}: {}", reddit_url, data_job.exception)
         return None
 
     if not data_job.data:
         logger.warning("gallery-dl returned no data for {}", reddit_url)
         return None
 
-    meta, media_items = extract_data(data_job.data)
+    return extract_data(data_job.data)
 
-    # Download the media files (including video conversion via yt-dlp).
+
+def download_media(reddit_url: str) -> tuple[Path | None, list[Path]]:
+    """Download a non-video post's media via gallery-dl.
+
+    Args:
+        reddit_url: URL of the post on Reddit.
+
+    Returns:
+        A tuple of the download directory and the downloaded media files.
+    """
     download_job = job.DownloadJob(reddit_url)
     status = download_job.run()
 
     if status:
-        logger.warning(
-            "gallery-dl finished with status {} for {}",
-            status,
-            reddit_url,
-        )
+        logger.warning("gallery-dl finished with status {} for {}", status, reddit_url)
 
     directory = download_directory(download_job)
     files = list_media_files(directory) if directory is not None else []
+    return directory, files
 
-    # Archive the post data so it can be read without re-fetching Reddit.
+
+def archive(
+    meta: dict[str, Any],
+    media_items: list[dict[str, Any]],
+    directory: Path | None,
+    files: list[Path],
+) -> None:
+    """Write the post metadata to disk for later reading."""
     meta["media"] = [{key: item.get(key) for key in ("url", "num", "filename", "extension")} for item in media_items]
     meta["files"] = [
         {
@@ -135,30 +209,99 @@ def download(reddit_url: str) -> tuple[dict[str, Any], list[Path]] | None:
     if directory is not None:
         write_metadata(directory / "metadata.json", meta)
 
-    return meta, files
 
-
-async def download_async(
-    reddit_url: str,
-) -> tuple[dict[str, Any], list[Path]] | None:
-    """Download a Reddit post's media without blocking the event loop.
+def download(reddit_url: str) -> tuple[dict[str, Any], list[Path]] | None:
+    """Download a Reddit post's media and archive its metadata (blocking).
 
     Args:
         reddit_url: URL of the post on Reddit.
 
     Returns:
-        The same result as :func:`download`.
+        A tuple of the post metadata and the list of downloaded media file
+        paths, or ``None`` if nothing was returned.
     """
-    return await to_thread.run_sync(download, reddit_url)
+    result = fetch_meta(reddit_url)
+    if result is None:
+        return None
+
+    meta, media_items = result
+
+    # Reddit videos have a direct progressive MP4 (``fallback_url``) with audio
+    # already muxed in. Download it straight from the CDN instead of running
+    # yt-dlp/ffmpeg over the DASH manifest.
+    fallback_url = _fallback_url(meta)
+    if fallback_url is not None:
+        try:
+            target = _video_path(meta)
+            files = [_download_fallback(fallback_url, target)]
+        except (niquests.RequestException, OSError) as exc:
+            logger.warning("Fallback video download failed for {}: {}", reddit_url, exc)
+        else:
+            archive(meta, media_items, target.parent, files)
+            return meta, files
+
+    directory, files = download_media(reddit_url)
+    archive(meta, media_items, directory, files)
+    return meta, files
 
 
-def build_embed(
+def download_video_background(
+    fallback_url: str,
+    target: Path,
+    meta: dict[str, Any],
+    media_items: list[dict[str, Any]],
+) -> None:
+    """Download a video in the background and archive its metadata.
+
+    Args:
+        fallback_url: The direct MP4 URL to download.
+        target: The destination file path.
+        meta: The post metadata.
+        media_items: The media items extracted from gallery-dl.
+    """
+    try:
+        _download_fallback(fallback_url, target)
+    except (niquests.RequestException, OSError) as exc:
+        logger.warning("Background video download failed: {}", exc)
+        return
+
+    archive(meta, media_items, target.parent, [target])
+
+
+async def fetch_meta_async(
+    reddit_url: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """Fetch post metadata without blocking the event loop.
+
+    Args:
+        reddit_url: URL of the post on Reddit.
+
+    Returns:
+        The same result as :func:`fetch_meta`.
+    """
+    return await to_thread.run_sync(fetch_meta, reddit_url)
+
+
+async def download_media_async(reddit_url: str) -> tuple[Path | None, list[Path]]:
+    """Download a non-video post's media without blocking the event loop.
+
+    Args:
+        reddit_url: URL of the post on Reddit.
+
+    Returns:
+        The same result as :func:`download_media`.
+    """
+    return await to_thread.run_sync(download_media, reddit_url)
+
+
+def build_embed(  # ruff: ignore[too-many-arguments]
     meta: dict[str, Any],
     files: list[Path],
     *,
     base_url: str,
     canonical_url: str,
     media_root: Path = REDDIT_MEDIA_DIR,
+    video_url: str | None = None,
 ) -> Embed:
     """Build an embed from a Reddit post and downloaded files.
 
@@ -168,6 +311,8 @@ def build_embed(
         base_url: The public base URL of this service.
         canonical_url: The canonical URL of the original post.
         media_root: The directory the media route serves.
+        video_url: An external video URL (Reddit's ``fallback_url``) to embed
+            directly instead of a locally downloaded file.
 
     Returns:
         An embed ready to render as Open Graph HTML.
@@ -185,15 +330,18 @@ def build_embed(
     except KeyError, IndexError, TypeError:
         poster = meta.get("thumbnail")
 
-    media = tuple(
-        Media(
-            url=public_url(path, base_url, media_root),
-            content_type=content_type_for(path),
-            width=width if content_type_for(path).startswith("video/") else None,
-            height=height if content_type_for(path).startswith("video/") else None,
+    if video_url is not None:
+        media = (Media(url=video_url, content_type="video/mp4", width=width, height=height),)
+    else:
+        media = tuple(
+            Media(
+                url=public_url(path, base_url, media_root),
+                content_type=content_type_for(path),
+                width=width if content_type_for(path).startswith("video/") else None,
+                height=height if content_type_for(path).startswith("video/") else None,
+            )
+            for path in files
         )
-        for path in files
-    )
 
     return Embed(
         title=title,
@@ -249,7 +397,7 @@ async def reddit(
 
     logger.info("Fetching post from Reddit: {}", canonical_url)
 
-    result = await download_async(canonical_url)
+    result = await fetch_meta_async(canonical_url)
 
     if result is None:
         logger.warning("No data returned for {}", canonical_url)
@@ -259,8 +407,38 @@ async def reddit(
             url=canonical_url,
             media=(),
         )
+        return Response(
+            content=generate_html(embed),
+            media_type="text/html",
+        )
+
+    meta, media_items = result
+    background = None
+
+    fallback_url = _fallback_url(meta)
+    if fallback_url is not None:
+        # Serve the embed immediately using Reddit's direct MP4, then download
+        # it in the background so subsequent requests are self-hosted.
+        target = _video_path(meta)
+        if target.is_file():
+            embed = build_embed(
+                meta,
+                [target],
+                base_url=base_url_for(request),
+                canonical_url=canonical_url,
+            )
+        else:
+            embed = build_embed(
+                meta,
+                [],
+                base_url=base_url_for(request),
+                canonical_url=canonical_url,
+                video_url=fallback_url,
+            )
+            background = BackgroundTask(download_video_background, fallback_url, target, meta, media_items)
     else:
-        meta, files = result
+        directory, files = await download_media_async(canonical_url)
+        archive(meta, media_items, directory, files)
         embed = build_embed(
             meta,
             files,
@@ -271,4 +449,5 @@ async def reddit(
     return Response(
         content=generate_html(embed),
         media_type="text/html",
+        background=background,
     )
