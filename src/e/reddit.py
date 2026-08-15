@@ -14,9 +14,9 @@ from litestar.response import Redirect
 from litestar.response import Response
 from loguru import logger
 
-from e.settings import MEDIA_DIR
 from e.settings import REDDIT_ARCHIVE_PATH
 from e.settings import REDDIT_CLIENT_ID
+from e.settings import REDDIT_MEDIA_DIR
 from e.settings import REDDIT_REFRESH_TOKEN
 from e.settings import REDDIT_URL
 from e.settings import REDDIT_USER_AGENT
@@ -42,7 +42,12 @@ def configure_extractor() -> None:
     config.set(
         path=("extractor",),
         key="base-directory",
-        value=str(MEDIA_DIR),
+        value=str(REDDIT_MEDIA_DIR),
+    )
+    config.set(
+        path=("extractor", "reddit"),
+        key="directory",
+        value=["{subreddit}", "{id}"],
     )
     config.set(
         path=("extractor",),
@@ -153,7 +158,7 @@ def build_embed(
     *,
     base_url: str,
     canonical_url: str,
-    media_root: Path = MEDIA_DIR,
+    media_root: Path = REDDIT_MEDIA_DIR,
 ) -> Embed:
     """Build an embed from a Reddit post and downloaded files.
 

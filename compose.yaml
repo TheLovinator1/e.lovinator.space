@@ -14,5 +14,6 @@ services:
       REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-yH0aTnJEt6qUgGn835B4vg}
       REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-org.quantumbadger.redreader/1.25.1}
       REDDIT_REFRESH_TOKEN: ${REDDIT_REFRESH_TOKEN:-}
+      FORWARDED_ALLOW_IPS: "*"
     volumes:
       - ./data:/data

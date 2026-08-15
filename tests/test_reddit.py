@@ -18,6 +18,7 @@ from e.discord import DiscordIPs
 from e.main import app
 from e.reddit import build_embed
 from e.settings import REDDIT_CLIENT_ID
+from e.settings import REDDIT_MEDIA_DIR
 from e.settings import REDDIT_USER_AGENT
 
 if TYPE_CHECKING:
@@ -38,6 +39,14 @@ def test_configure_extractor_uses_oauth() -> None:
 
     assert config.get(("extractor", "reddit"), "client-id") == REDDIT_CLIENT_ID
     assert config.get(("extractor", "reddit"), "user-agent") == REDDIT_USER_AGENT
+
+
+def test_configure_extractor_stores_each_post_in_its_own_directory() -> None:
+    """Test that Reddit media is stored per post under the Reddit dir."""
+    reddit_module.configure_extractor()
+
+    assert config.get(path=("extractor",), key="base-directory") == str(REDDIT_MEDIA_DIR)
+    assert config.get(path=("extractor", "reddit"), key="directory") == ["{subreddit}", "{id}"]
 
 
 def test_configure_extractor_uses_refresh_token_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -22,8 +22,11 @@ DIRS: PlatformDirs = PlatformDirs(
 DATA_DIR: Path = DIRS.user_data_path
 """Base directory for all persisted application data."""
 
-MEDIA_DIR: Path = DATA_DIR / "Twitter" / "Downloads"
+TWITTER_MEDIA_DIR: Path = DATA_DIR / "Twitter" / "Downloads"
 """Directory gallery-dl downloads tweet media into."""
+
+REDDIT_MEDIA_DIR: Path = DATA_DIR / "Reddit" / "Downloads"
+"""Directory gallery-dl downloads Reddit media into."""
 
 ARCHIVE_PATH: Path = DATA_DIR / "twitter.sqlite3"
 """gallery-dl download archive database."""
@@ -59,4 +62,5 @@ REDDIT_ARCHIVE_PATH: Path = DATA_DIR / "reddit.sqlite3"
 MEDIA_ROUTE: str = "/media"
 """Route prefix under which downloaded media files are served."""
 
-MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+TWITTER_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+REDDIT_MEDIA_DIR.mkdir(parents=True, exist_ok=True)

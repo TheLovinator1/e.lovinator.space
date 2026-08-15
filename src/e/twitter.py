@@ -29,9 +29,9 @@ from selectolax.parser import HTMLParser
 from e.discord import DiscordIPs
 from e.discord import get_discord_ips
 from e.settings import ARCHIVE_PATH
-from e.settings import MEDIA_DIR
 from e.settings import NITTER_INSTANCE
 from e.settings import ORIGINAL_URL
+from e.settings import TWITTER_MEDIA_DIR
 
 CONTENT_TYPES: dict[str, str] = {
     "jpg": "image/jpeg",
@@ -86,7 +86,7 @@ def configure_extractor() -> None:
     config.set(
         path=("extractor",),
         key="base-directory",
-        value=str(MEDIA_DIR),
+        value=str(TWITTER_MEDIA_DIR),
     )
     config.set(
         path=("extractor", "nitter"),
@@ -182,7 +182,7 @@ def list_media_files(directory: Path) -> list[Path]:
     )
 
 
-def public_url(path: Path, base_url: str, media_root: Path = MEDIA_DIR) -> str:
+def public_url(path: Path, base_url: str, media_root: Path = TWITTER_MEDIA_DIR) -> str:
     """Build the public URL for a downloaded media file.
 
     Args:
@@ -344,7 +344,7 @@ def build_embed(
     *,
     base_url: str,
     canonical_url: str,
-    media_root: Path = MEDIA_DIR,
+    media_root: Path = TWITTER_MEDIA_DIR,
 ) -> Embed:
     """Build an embed from tweet metadata and downloaded files.
 
