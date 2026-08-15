@@ -1,0 +1,18 @@
+services:
+  e:
+    image: ghcr.io/thelovinator1/e.lovinator.space:latest
+    restart: unless-stopped
+    # Reap child processes (yt-dlp/ffmpeg) and handle signals cleanly.
+    init: true
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      PORT: "8000"
+      NITTER_INSTANCE: ${NITTER_INSTANCE:-https://nitter.net}
+      ORIGINAL_URL: ${ORIGINAL_URL:-https://twitter.com}
+      REDDIT_URL: ${REDDIT_URL:-https://www.reddit.com}
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-yH0aTnJEt6qUgGn835B4vg}
+      REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-org.quantumbadger.redreader/1.25.1}
+      REDDIT_REFRESH_TOKEN: ${REDDIT_REFRESH_TOKEN:-}
+    volumes:
+      - ./data:/data

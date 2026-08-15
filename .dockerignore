@@ -1,0 +1,35 @@
+# Version control / CI
+.git/
+.gitignore
+.gitattributes
+.forgejo/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pdm-build/
+.pixi/
+
+# Secrets / environment (never bake these into the image)
+.env
+.envrc
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Not needed at build or runtime
+tests/
+pic.webp
+tmp_e_*/
+data/
