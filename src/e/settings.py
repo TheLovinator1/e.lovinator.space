@@ -1,14 +1,15 @@
-"""Application settings and shared filesystem locations."""
-
 from __future__ import annotations
 
 import os
 from typing import TYPE_CHECKING
 
+from dotenv import load_dotenv
 from platformdirs import PlatformDirs
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+load_dotenv()
 
 DIRS: PlatformDirs = PlatformDirs(
     appauthor="TheLovinator",
@@ -36,6 +37,24 @@ Must be an instance supported by gallery-dl's Nitter extractor, e.g.
 
 ORIGINAL_URL: str = os.getenv("ORIGINAL_URL", "https://twitter.com").rstrip("/")
 """Where non-Discord visitors are redirected."""
+
+REDDIT_URL: str = os.getenv("REDDIT_URL", "https://www.reddit.com").rstrip("/")
+"""Base URL of Reddit, used to build links and redirects."""
+
+REDDIT_CLIENT_ID: str = os.getenv("REDDIT_CLIENT_ID", "yH0aTnJEt6qUgGn835B4vg")
+"""Reddit OAuth client ID used by gallery-dl."""
+
+REDDIT_USER_AGENT: str = os.getenv("REDDIT_USER_AGENT", "org.quantumbadger.redreader/1.25.1")
+"""User-Agent sent with Reddit API requests."""
+
+REDDIT_REFRESH_TOKEN: str | None = os.getenv("REDDIT_REFRESH_TOKEN")
+"""Reddit OAuth refresh token.
+
+When unset, gallery-dl falls back to reading the token from its cache.
+"""
+
+REDDIT_ARCHIVE_PATH: Path = DATA_DIR / "reddit.sqlite3"
+"""gallery-dl download archive database for Reddit."""
 
 MEDIA_ROUTE: str = "/media"
 """Route prefix under which downloaded media files are served."""

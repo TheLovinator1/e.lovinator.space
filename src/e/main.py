@@ -10,6 +10,7 @@ from litestar import get
 from litestar.response import Response
 from litestar.static_files import create_static_files_router
 
+from e.reddit import reddit
 from e.settings import MEDIA_DIR
 from e.settings import MEDIA_ROUTE
 from e.twitter import twitter
@@ -30,6 +31,7 @@ async def favicon() -> Response:  # ruff: ignore[unused-async]
 app = Litestar(
     route_handlers=[
         twitter,
+        reddit,
         favicon,
         create_static_files_router(
             path=MEDIA_ROUTE,

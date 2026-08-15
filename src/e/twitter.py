@@ -1,12 +1,3 @@
-"""Twitter/X embeds powered by gallery-dl and a Nitter instance.
-
-Discord's link preview fetcher reads Open Graph and Twitter Card ``<meta>``
-tags.  Twitter/X serves no usable tags to Discord, so this module downloads a
-tweet (and its media) from a Nitter instance via gallery-dl, archives the tweet
-metadata as ``metadata.json`` next to the media, and renders our own tags,
-including ``og:video`` for video tweets.
-"""
-
 from __future__ import annotations
 
 import json
@@ -254,7 +245,7 @@ def write_metadata(path: Path, metadata: dict[str, Any]) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def _download_directory(download_job: job.DownloadJob) -> Path | None:
+def download_directory(download_job: job.DownloadJob) -> Path | None:
     """Return the directory gallery-dl downloaded into.
 
     Args:
@@ -313,7 +304,7 @@ def download(nitter_url: str) -> tuple[dict[str, Any], list[Path]] | None:
             nitter_url,
         )
 
-    directory = _download_directory(download_job)
+    directory = download_directory(download_job)
     files = list_media_files(directory) if directory is not None else []
 
     # Archive the tweet data so it can be read without re-fetching Nitter.

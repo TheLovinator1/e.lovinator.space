@@ -153,13 +153,14 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
-    { name = "gallery-dl" },
+    { name = "gallery-dl", extra = ["video"] },
     { name = "htpy" },
     { name = "litestar" },
     { name = "loguru" },
     { name = "niquests" },
     { name = "platformdirs" },
     { name = "pydantic" },
+    { name = "python-dotenv" },
     { name = "selectolax" },
     { name = "uvicorn" },
     { name = "wreq" },
@@ -173,13 +174,14 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "anyio", specifier = ">=4.14.2" },
-    { name = "gallery-dl", url = "https://codeberg.org/mikf/gallery-dl/archive/master.tar.gz" },
+    { name = "gallery-dl", extras = ["video"], url = "https://codeberg.org/mikf/gallery-dl/archive/master.tar.gz" },
     { name = "htpy", specifier = ">=26.5.1" },
     { name = "litestar", specifier = ">=2.24.0" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "niquests", specifier = ">=3.21.0" },
     { name = "platformdirs", specifier = ">=4.11.1" },
     { name = "pydantic", specifier = ">=2.13.4" },
+    { name = "python-dotenv", specifier = ">=1.1.0" },
     { name = "selectolax", specifier = ">=0.4.11" },
     { name = "uvicorn", specifier = ">=0.52.1" },
     { name = "wreq", specifier = ">=0.12.1" },
@@ -207,7 +209,12 @@ source = { url = "https://codeberg.org/mikf/gallery-dl/archive/master.tar.gz" }
 dependencies = [
     { name = "requests" },
 ]
-sdist = { hash = "sha256:8bcbf15a7cb0fe282a717faf1058064d3821f60bd23ffb42090c5360a532d94a" }
+sdist = { hash = "sha256:b290d06547e89a6dc38df4934186011ba62a711e32ef8777fed4ee2547d8ec83" }
+
+[package.optional-dependencies]
+video = [
+    { name = "yt-dlp" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -640,6 +647,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-dotenv"
+version = "1.2.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/82/ed/0301aeeac3e5353ef3d94b6ec08bbcabd04a72018415dcb29e588514bba8/python_dotenv-1.2.2.tar.gz", hash = "sha256:2c371a91fbd7ba082c2c1dc1f8bf89ca22564a087c2c287cd9b662adde799cf3", size = 50135, upload-time = "2026-03-01T16:00:26.196Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/d7/1959b9648791274998a9c3526f6d0ec8fd2233e4d4acce81bbae76b44b2a/python_dotenv-1.2.2-py3-none-any.whl", hash = "sha256:1d8214789a24de455a8b8bd8ae6fe3c6b69a5e3d64aa8a8e5d68e694bbcb285a", size = 22101, upload-time = "2026-03-01T16:00:25.09Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -902,4 +918,13 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/30/b7/d289f6c01e75f81c77582b3240313df8102c06c775be8b6967b08fc546b3/wreq-0.12.1-cp314-cp314t-win32.whl", hash = "sha256:03eead6508200bb700b2a48ad79a29590e417fca8043d99d1740cada5f755f41", size = 3769337, upload-time = "2026-07-11T15:32:00.838Z" },
     { url = "https://files.pythonhosted.org/packages/d8/d2/7f2ddc9fa0e0e07a2766777d86834ff81a0bd3d6bb2dca74a20280f19265/wreq-0.12.1-cp314-cp314t-win_amd64.whl", hash = "sha256:e9ac6bde60b5c49b5156c0f3c4e9276ba50f1fc39f3d2979598d96919f007206", size = 4135100, upload-time = "2026-07-11T15:32:02.549Z" },
     { url = "https://files.pythonhosted.org/packages/32/c2/0812298e84f6f1889ebd7556dcc40ddf0f8ff2103ca47676de8422d34b47/wreq-0.12.1-cp314-cp314t-win_arm64.whl", hash = "sha256:df0b53224246bc5d83593c97dafe31a0ad89605941b1dd53297a3c339477c888", size = 3799784, upload-time = "2026-07-11T15:32:04.091Z" },
+]
+
+[[package]]
+name = "yt-dlp"
+version = "2026.7.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/c5/9972af4b472b0d55badf841ebafd2f98944cb0ae0f46e11d01f363ea5b91/yt_dlp-2026.7.4.tar.gz", hash = "sha256:b094813404f87a9dd2186f00815231df32e5fd8a5403be0f807b3bb2d21a4432", size = 3049326, upload-time = "2026-07-04T22:42:14.837Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f9/8a/cd4c9b02c10c563adfe78118310129641900e1cd6de888cfae2452072696/yt_dlp-2026.7.4-py3-none-any.whl", hash = "sha256:f11f2b11d5a8ac4059f9bdf29fa4407dc7c6bb00c5097e95ca22a7a9db518266", size = 3184705, upload-time = "2026-07-04T22:42:12.989Z" },
 ]
