@@ -250,10 +250,14 @@ def test_route_returns_embed_for_discord(monkeypatch: pytest.MonkeyPatch) -> Non
         lambda request: ip_address("127.0.0.1"),
     )
 
-    async def fake_download_async(nitter_url: str) -> tuple[dict[str, Any], list[Path]]:  # ruff: ignore[unused-async]
-        return KWDICT, [Path("1.mp4")]
+    async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return KWDICT, []
 
-    monkeypatch.setattr(twitter_module, "download_async", fake_download_async)
+    def fake_download_media(nitter_url: str) -> tuple[Path | None, list[Path]]:
+        return None, [Path("1.mp4")]
+
+    monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
+    monkeypatch.setattr(twitter_module, "download_media", fake_download_media)
 
     with TestClient(app=app) as client:
         response = client.get("/DiscussingFilm/status/2086143411984208230")
@@ -262,6 +266,40 @@ def test_route_returns_embed_for_discord(monkeypatch: pytest.MonkeyPatch) -> Non
     assert response.headers["content-type"].startswith("text/html")
     assert 'name="twitter:player:stream"' in response.text
     assert "/media/1.mp4" in response.text
+
+
+def test_route_video_uses_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that a video embed points at Nitter's direct MP4 immediately."""
+    monkeypatch.setattr(
+        twitter_module,
+        "client_ip_from",
+        lambda request: ip_address("127.0.0.1"),
+    )
+
+    direct_url = (
+        "https://nitter.net/video/abc/https%3A%2F%2Fvideo.twimg.com%2F"
+        "amplify_video%2F1%2Fvid%2Favc1%2F1080x1920%2Fabc.mp4"
+    )
+
+    async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return KWDICT, [{"url": direct_url, "extension": "mp4", "num": 1}]
+
+    calls: dict[str, str] = {}
+
+    def fake_download_background(nitter_url: str, meta: dict[str, Any], media_items: list[dict[str, Any]]) -> None:
+        calls["url"] = nitter_url
+
+    monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
+    monkeypatch.setattr(twitter_module, "download_background", fake_download_background)
+
+    with TestClient(app=app) as client:
+        response = client.get("/DiscussingFilm/status/2086143411984208230")
+
+    assert response.status_code == 200
+    assert f'property="og:video" content="{direct_url}"' in response.text
+    assert 'property="og:video:width" content="1080"' in response.text
+    assert 'property="og:video:height" content="1920"' in response.text
+    assert calls["url"].endswith("/DiscussingFilm/status/2086143411984208230")
 
 
 def test_route_redirects_non_discord(monkeypatch: pytest.MonkeyPatch) -> None:

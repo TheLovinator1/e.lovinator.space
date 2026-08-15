@@ -20,6 +20,7 @@ from htpy import html
 from htpy import meta
 from litestar import Request
 from litestar import get
+from litestar.background_tasks import BackgroundTask
 from litestar.params import PathParameter
 from litestar.response import Redirect
 from litestar.response import Response
@@ -272,51 +273,97 @@ def download_directory(download_job: job.DownloadJob) -> Path | None:
     return Path(str(pathfmt.directory))
 
 
-def download(nitter_url: str) -> tuple[dict[str, Any], list[Path]] | None:
-    """Download a tweet's media and archive its metadata.
+_DIMENSIONS_RE = re.compile(r"(\d+)x(\d+)")
+
+
+def _direct_video_url(media_items: list[dict[str, Any]]) -> str | None:
+    """Return the direct MP4 URL from the media items, if present.
+
+    gallery-dl already exposes Nitter's direct MP4 links (which carry the
+    resolution in their path). HLS and yt-dlp URLs are prefixed with ``ytdl:``
+    and cannot be embedded directly.
+
+    Args:
+        media_items: The media items extracted from gallery-dl.
+
+    Returns:
+        The direct MP4 URL, or ``None`` if the video needs yt-dlp.
+    """
+    for item in media_items:
+        url = item.get("url") or ""
+        if item.get("extension") == "mp4" and not url.startswith("ytdl:"):
+            return url
+    return None
+
+
+def _video_dimensions(url: str) -> tuple[int | None, int | None]:
+    """Extract the ``{width}x{height}`` resolution from a direct MP4 URL.
+
+    Args:
+        url: The direct MP4 URL.
+
+    Returns:
+        A tuple of the width and height, or ``(None, None)`` when the URL does
+        not include a resolution.
+    """
+    if match := _DIMENSIONS_RE.search(url):
+        return int(match.group(1)), int(match.group(2))
+    return None, None
+
+
+def fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """Fetch a tweet's metadata without downloading its media.
 
     Args:
         nitter_url: URL of the tweet on a Nitter instance.
 
     Returns:
-        A tuple of the tweet metadata and the list of downloaded media file
-        paths, or ``None`` if nothing was returned.
+        A tuple of the tweet metadata and the list of media items, or ``None``
+        if gallery-dl returned nothing.
     """
     configure_extractor()
 
-    # Extract the tweet metadata without downloading anything.
     data_job = job.DataJob(nitter_url, file=None)
     data_job.run()
 
     if data_job.exception is not None:
-        logger.warning(
-            "gallery-dl failed to extract {}: {}",
-            nitter_url,
-            data_job.exception,
-        )
+        logger.warning("gallery-dl failed to extract {}: {}", nitter_url, data_job.exception)
         return None
 
     if not data_job.data:
         logger.warning("gallery-dl returned no data for {}", nitter_url)
         return None
 
-    meta, media_items = extract_data(data_job.data)
+    return extract_data(data_job.data)
 
-    # Download the media files (including video conversion via yt-dlp).
+
+def download_media(nitter_url: str) -> tuple[Path | None, list[Path]]:
+    """Download a tweet's media via gallery-dl (including yt-dlp for video).
+
+    Args:
+        nitter_url: URL of the tweet on a Nitter instance.
+
+    Returns:
+        A tuple of the download directory and the downloaded media files.
+    """
     download_job = job.DownloadJob(nitter_url)
     status = download_job.run()
 
     if status:
-        logger.warning(
-            "gallery-dl finished with status {} for {}",
-            status,
-            nitter_url,
-        )
+        logger.warning("gallery-dl finished with status {} for {}", status, nitter_url)
 
     directory = download_directory(download_job)
     files = list_media_files(directory) if directory is not None else []
+    return directory, files
 
-    # Archive the tweet data so it can be read without re-fetching Nitter.
+
+def archive(
+    meta: dict[str, Any],
+    media_items: list[dict[str, Any]],
+    directory: Path | None,
+    files: list[Path],
+) -> None:
+    """Write the tweet metadata to disk for later reading."""
     meta["media"] = [{key: item.get(key) for key in ("url", "num", "filename", "extension")} for item in media_items]
     meta["files"] = [
         {
@@ -330,30 +377,67 @@ def download(nitter_url: str) -> tuple[dict[str, Any], list[Path]] | None:
     if directory is not None:
         write_metadata(directory / "metadata.json", meta)
 
-    return meta, files
 
-
-async def download_async(
-    nitter_url: str,
-) -> tuple[dict[str, Any], list[Path]] | None:
-    """Download a tweet's media without blocking the event loop.
+def download(nitter_url: str) -> tuple[dict[str, Any], list[Path]] | None:
+    """Download a tweet's media and archive its metadata (blocking).
 
     Args:
         nitter_url: URL of the tweet on a Nitter instance.
 
     Returns:
-        The same result as :func:`download`.
+        A tuple of the tweet metadata and the list of downloaded media file
+        paths, or ``None`` if nothing was returned.
     """
-    return await to_thread.run_sync(download, nitter_url)
+    result = fetch_meta(nitter_url)
+    if result is None:
+        return None
+
+    meta, media_items = result
+    directory, files = download_media(nitter_url)
+    archive(meta, media_items, directory, files)
+    return meta, files
 
 
-def build_embed(
+def download_background(
+    nitter_url: str,
+    meta: dict[str, Any],
+    media_items: list[dict[str, Any]],
+) -> None:
+    """Download a tweet's media in the background and archive its metadata.
+
+    Args:
+        nitter_url: URL of the tweet on a Nitter instance.
+        meta: The tweet metadata.
+        media_items: The media items extracted from gallery-dl.
+    """
+    directory, files = download_media(nitter_url)
+    archive(meta, media_items, directory, files)
+
+
+async def fetch_meta_async(
+    nitter_url: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """Fetch tweet metadata without blocking the event loop.
+
+    Args:
+        nitter_url: URL of the tweet on a Nitter instance.
+
+    Returns:
+        The same result as :func:`fetch_meta`.
+    """
+    return await to_thread.run_sync(fetch_meta, nitter_url)
+
+
+def build_embed(  # ruff: ignore[too-many-arguments]
     meta: dict[str, Any],
     files: list[Path],
     *,
     base_url: str,
     canonical_url: str,
     media_root: Path = TWITTER_MEDIA_DIR,
+    video_url: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
 ) -> Embed:
     """Build an embed from tweet metadata and downloaded files.
 
@@ -363,6 +447,10 @@ def build_embed(
         base_url: The public base URL of this service.
         canonical_url: The canonical URL of the original tweet.
         media_root: The directory the media route serves.
+        video_url: An external video URL to embed directly instead of a locally
+            downloaded file.
+        width: The pixel width of the external video.
+        height: The pixel height of the external video.
 
     Returns:
         An embed ready to render as Open Graph HTML.
@@ -378,13 +466,16 @@ def build_embed(
         strip=True,
     )
 
-    media = tuple(
-        Media(
-            url=public_url(path, base_url, media_root),
-            content_type=content_type_for(path),
+    if video_url is not None:
+        media = (Media(url=video_url, content_type="video/mp4", width=width, height=height),)
+    else:
+        media = tuple(
+            Media(
+                url=public_url(path, base_url, media_root),
+                content_type=content_type_for(path),
+            )
+            for path in files
         )
-        for path in files
-    )
 
     return Embed(
         title=title,
@@ -576,7 +667,7 @@ async def twitter(
     nitter_url = f"{NITTER_INSTANCE}/{username}/status/{tweet_id}"
     logger.info("Fetching tweet from Nitter: {}", nitter_url)
 
-    result = await download_async(nitter_url)
+    result = await fetch_meta_async(nitter_url)
 
     if result is None:
         logger.warning("No data returned for {}", nitter_url)
@@ -586,8 +677,29 @@ async def twitter(
             url=canonical_url,
             media=(),
         )
+        return Response(
+            content=generate_html(embed),
+            media_type="text/html",
+        )
+
+    meta, media_items = result
+    background = None
+
+    if video_url := _direct_video_url(media_items):
+        width, height = _video_dimensions(video_url)
+        embed = build_embed(
+            meta,
+            [],
+            base_url=base_url_for(request),
+            canonical_url=canonical_url,
+            video_url=video_url,
+            width=width,
+            height=height,
+        )
+        background = BackgroundTask(download_background, nitter_url, meta, media_items)
     else:
-        meta, files = result
+        directory, files = await to_thread.run_sync(download_media, nitter_url)
+        archive(meta, media_items, directory, files)
         embed = build_embed(
             meta,
             files,
@@ -598,4 +710,5 @@ async def twitter(
     return Response(
         content=generate_html(embed),
         media_type="text/html",
+        background=background,
     )
