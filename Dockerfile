@@ -1,10 +1,8 @@
 # syntax=docker/dockerfile:1
 
-ARG UV_VERSION=0.12.2
+FROM python:slim AS builder
 
-FROM python:3.14-slim-bookworm AS builder
-
-COPY --from=ghcr.io/astral-sh/uv:${UV_VERSION} /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ENV UV_PYTHON_DOWNLOADS=never \
     UV_COMPILE_BYTECODE=1 \
@@ -21,7 +19,7 @@ COPY . /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
 
-FROM python:3.14-slim-bookworm AS runtime
+FROM python:slim AS runtime
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
