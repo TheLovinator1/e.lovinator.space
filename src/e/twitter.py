@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import binascii
 import json
 import re
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Annotated
 from typing import Any
 from urllib.parse import quote
+from urllib.parse import unquote
+from urllib.parse import urlsplit
 
 from anyio import to_thread
 from gallery_dl import config
@@ -158,6 +161,71 @@ def is_media_file(path: Path) -> bool:
         ``True`` if the file has a supported media extension.
     """
     return path.is_file() and path.suffix.lower().lstrip(".") in CONTENT_TYPES
+
+
+def original_image_url(url: str) -> str | None:
+    """Return the original ``pbs.twimg.com`` URL for a Nitter media URL.
+
+    Nitter proxies Twitter media and encodes the original path into the proxy
+    URL: percent-encoded after ``/pic/orig/media%2F`` on regular instances, or
+    base64-encoded after ``/pic/enc/`` on encrypted instances. Embedding the
+    reconstructed CDN URL lets clients such as Discord download the image
+    directly from Twitter instead of waiting for this service to archive it.
+
+    Args:
+        url: The media URL from gallery-dl's Nitter extractor.
+
+    Returns:
+        The original Twitter CDN URL, or ``None`` when it cannot be derived.
+    """
+    if url.startswith("https://pbs.twimg.com/"):
+        return url
+
+    path = urlsplit(url).path
+    if "/pic/" not in path:
+        return None
+
+    if "/enc/" in path:
+        encoded = path.rpartition("/")[2]
+        try:
+            decoded = binascii.a2b_base64(encoded).decode("utf-8", "replace")
+        except binascii.Error, ValueError:
+            return None
+        if decoded.startswith("http"):
+            return decoded
+        if "/" in decoded:
+            return f"https://pbs.twimg.com/{decoded.lstrip('/')}"
+        return f"https://pbs.twimg.com/media/{decoded}"
+
+    name = unquote(path[match.end() :]) if (match := re.search(r"%2[fF]", path)) else path.rpartition("/")[2]
+    if not name:
+        return None
+    return f"https://pbs.twimg.com/media/{name}"
+
+
+def original_image_urls(media_items: list[dict[str, Any]]) -> list[str] | None:
+    """Reconstruct the original CDN URLs for all image media items.
+
+    Video items are skipped: their URLs cannot be mapped back to Twitter's
+    CDN and are handled by the video paths.
+
+    Args:
+        media_items: The media items extracted from gallery-dl.
+
+    Returns:
+        The original URLs for every image in order, or ``None`` if any image
+        cannot be mapped (the caller should fall back to downloading).
+    """
+    urls: list[str] = []
+    for item in media_items:
+        extension = (item.get("extension") or "").lower().lstrip(".")
+        if not CONTENT_TYPES.get(extension, "").startswith("image/"):
+            continue
+        original = original_image_url(item.get("url") or "")
+        if original is None:
+            return None
+        urls.append(original)
+    return urls
 
 
 def _file_sort_key(path: Path) -> tuple[int, str]:
@@ -438,6 +506,7 @@ def build_embed(  # ruff: ignore[too-many-arguments]
     video_url: str | None = None,
     width: int | None = None,
     height: int | None = None,
+    image_urls: tuple[str, ...] | None = None,
 ) -> Embed:
     """Build an embed from tweet metadata and downloaded files.
 
@@ -451,6 +520,8 @@ def build_embed(  # ruff: ignore[too-many-arguments]
             downloaded file.
         width: The pixel width of the external video.
         height: The pixel height of the external video.
+        image_urls: External image URLs to embed directly instead of locally
+            downloaded files.
 
     Returns:
         An embed ready to render as Open Graph HTML.
@@ -468,6 +539,14 @@ def build_embed(  # ruff: ignore[too-many-arguments]
 
     if video_url is not None:
         media = (Media(url=video_url, content_type="video/mp4", width=width, height=height),)
+    elif image_urls is not None:
+        media = tuple(
+            Media(
+                url=image_url,
+                content_type=content_type_for(Path(urlsplit(image_url).path).name),
+            )
+            for image_url in image_urls
+        )
     else:
         media = tuple(
             Media(
@@ -695,6 +774,17 @@ async def twitter(
             video_url=video_url,
             width=width,
             height=height,
+        )
+        background = BackgroundTask(download_background, nitter_url, meta, media_items)
+    elif image_urls := original_image_urls(media_items):
+        # Embed the images straight from Twitter's CDN so Discord does not
+        # have to wait for the archive download; archive in the background.
+        embed = build_embed(
+            meta,
+            [],
+            base_url=base_url_for(request),
+            canonical_url=canonical_url,
+            image_urls=tuple(image_urls),
         )
         background = BackgroundTask(download_background, nitter_url, meta, media_items)
     else:

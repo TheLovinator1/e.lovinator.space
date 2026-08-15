@@ -1,4 +1,5 @@
 import json
+from base64 import b64encode
 from datetime import UTC
 from datetime import datetime
 from ipaddress import ip_address
@@ -20,6 +21,8 @@ from e.twitter import extract_data
 from e.twitter import generate_html
 from e.twitter import is_media_file
 from e.twitter import list_media_files
+from e.twitter import original_image_url
+from e.twitter import original_image_urls
 from e.twitter import public_url
 
 if TYPE_CHECKING:
@@ -94,6 +97,59 @@ def test_list_media_files_missing_directory(tmp_dir: Path) -> None:
     assert list_media_files(tmp_dir / "does-not-exist") == []
 
 
+def test_original_image_url() -> None:
+    """Test reconstructing Twitter CDN URLs from Nitter media URLs."""
+    assert (
+        original_image_url("https://nitter.net/pic/orig/media%2FHPN4YF0X0AAx-ug.jpg")
+        == "https://pbs.twimg.com/media/HPN4YF0X0AAx-ug.jpg"
+    )
+    assert (
+        original_image_url("https://nitter.net/pic/orig/media%2FHPN4YF0X0AAx-ug.jpg?format=jpg&name=orig")
+        == "https://pbs.twimg.com/media/HPN4YF0X0AAx-ug.jpg"
+    )
+    assert (
+        original_image_url("https://nitter.net/pic/orig/media/HPN4YF0X0AAx-ug.png")
+        == "https://pbs.twimg.com/media/HPN4YF0X0AAx-ug.png"
+    )
+    encoded = b64encode(b"https://pbs.twimg.com/media/HPN4YF0X0AAx-ug.jpg").decode()
+    assert (
+        original_image_url(f"https://nitter.net/pic/enc/{encoded}") == "https://pbs.twimg.com/media/HPN4YF0X0AAx-ug.jpg"
+    )
+    assert (
+        original_image_url("https://pbs.twimg.com/media/HPN4YF0X0AAx-ug.jpg")
+        == "https://pbs.twimg.com/media/HPN4YF0X0AAx-ug.jpg"
+    )
+    assert original_image_url("") is None
+    assert original_image_url("https://nitter.net/video/abc") is None
+    assert original_image_url("ytdl:https://nitter.net/i/status/123") is None
+
+
+def test_original_image_urls() -> None:
+    """Test reconstructing URLs for a tweet's image media items."""
+    items = [
+        {"url": "https://nitter.net/pic/orig/media%2Fa.jpg", "extension": "jpg"},
+        {"url": "https://nitter.net/pic/orig/media%2Fb.png", "extension": "png"},
+    ]
+    assert original_image_urls(items) == [
+        "https://pbs.twimg.com/media/a.jpg",
+        "https://pbs.twimg.com/media/b.png",
+    ]
+
+    # Video items are skipped.
+    mixed = [
+        {"url": "ytdl:https://nitter.net/i/status/123", "extension": "mp4"},
+        {"url": "https://nitter.net/pic/orig/media%2Fa.jpg", "extension": "jpg"},
+    ]
+    assert original_image_urls(mixed) == ["https://pbs.twimg.com/media/a.jpg"]
+
+    # A non-reconstructable image makes the whole result None.
+    broken = [{"url": "https://nitter.net/weird-url", "extension": "jpg"}]
+    assert original_image_urls(broken) is None
+
+    assert original_image_urls([]) == []
+    assert original_image_urls([{"url": "ytdl:https://nitter.net/i/status/123", "extension": "mp4"}]) == []
+
+
 def test_public_url(tmp_dir: Path) -> None:
     """Test building public URLs for downloaded media."""
     path = tmp_dir / "DiscussingFilm" / "2086143411984208230" / "1.mp4"
@@ -130,6 +186,21 @@ def test_build_embed(tmp_dir: Path) -> None:
     assert embed.media[1].content_type == "video/mp4"
     assert embed.media[1].is_video
     assert embed.media[1].url == "https://e.lovinator.space/media/2.mp4"
+
+
+def test_build_embed_with_image_urls() -> None:
+    """Test building an embed from external Twitter CDN image URLs."""
+    embed = build_embed(
+        KWDICT,
+        [],
+        base_url="https://e.lovinator.space",
+        canonical_url="https://twitter.com/DiscussingFilm/status/2086143411984208230",
+        image_urls=("https://pbs.twimg.com/media/HPN4YF0X0AAx-ug.jpg",),
+    )
+
+    assert embed.media[0].url == "https://pbs.twimg.com/media/HPN4YF0X0AAx-ug.jpg"
+    assert embed.media[0].content_type == "image/jpeg"
+    assert not embed.media[0].is_video
 
 
 def test_generate_html_video_embed() -> None:
@@ -300,6 +371,71 @@ def test_route_video_uses_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'property="og:video:width" content="1080"' in response.text
     assert 'property="og:video:height" content="1920"' in response.text
     assert calls["url"].endswith("/DiscussingFilm/status/2086143411984208230")
+
+
+def test_route_image_uses_original_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that an image embed points at Twitter's CDN immediately."""
+    monkeypatch.setattr(
+        twitter_module,
+        "client_ip_from",
+        lambda request: ip_address("127.0.0.1"),
+    )
+
+    media_items = [
+        {"url": "https://nitter.net/pic/orig/media%2FHPN4YF0X0AAx-ug.jpg", "extension": "jpg", "num": 1},
+        {"url": "https://nitter.net/pic/orig/media%2FHPN4YF0X0AAx-ug2.jpg", "extension": "jpg", "num": 2},
+    ]
+
+    async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return KWDICT, media_items
+
+    calls: dict[str, str] = {}
+
+    def fake_download_background(nitter_url: str, meta: dict[str, Any], media_items: list[dict[str, Any]]) -> None:
+        calls["url"] = nitter_url
+
+    def fake_download_media(nitter_url: str) -> tuple[Path | None, list[Path]]:
+        msg = "download_media should not run when images are embedded directly"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
+    monkeypatch.setattr(twitter_module, "download_background", fake_download_background)
+    monkeypatch.setattr(twitter_module, "download_media", fake_download_media)
+
+    with TestClient(app=app) as client:
+        response = client.get("/DiscussingFilm/status/2086143411984208230")
+
+    assert response.status_code == 200
+    assert 'property="og:image" content="https://pbs.twimg.com/media/HPN4YF0X0AAx-ug.jpg"' in response.text
+    assert 'property="og:image" content="https://pbs.twimg.com/media/HPN4YF0X0AAx-ug2.jpg"' in response.text
+    assert "testserver.local/media/" not in response.text
+    assert calls["url"].endswith("/DiscussingFilm/status/2086143411984208230")
+
+
+def test_route_image_falls_back_to_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that an unreconstructable image URL falls back to downloading."""
+    monkeypatch.setattr(
+        twitter_module,
+        "client_ip_from",
+        lambda request: ip_address("127.0.0.1"),
+    )
+
+    media_items = [{"url": "https://nitter.net/weird-url", "extension": "jpg", "num": 1}]
+
+    async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return KWDICT, media_items
+
+    def fake_download_media(nitter_url: str) -> tuple[Path | None, list[Path]]:
+        return None, [Path("1.jpg")]
+
+    monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
+    monkeypatch.setattr(twitter_module, "download_media", fake_download_media)
+
+    with TestClient(app=app) as client:
+        response = client.get("/DiscussingFilm/status/2086143411984208230")
+
+    assert response.status_code == 200
+    assert 'property="og:image" content="http://testserver.local/media/1.jpg"' in response.text
 
 
 def test_route_redirects_non_discord(monkeypatch: pytest.MonkeyPatch) -> None:
