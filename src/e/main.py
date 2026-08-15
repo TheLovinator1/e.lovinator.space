@@ -8,12 +8,9 @@ from gallery_dl import output
 from litestar import Litestar
 from litestar import get
 from litestar.response import Response
-from litestar.static_files import create_static_files_router
 
+from e.media import media
 from e.reddit import reddit
-from e.settings import MEDIA_ROUTE
-from e.settings import REDDIT_MEDIA_DIR
-from e.settings import TWITTER_MEDIA_DIR
 from e.twitter import twitter
 
 output.initialize_logging(logging.INFO)
@@ -33,11 +30,8 @@ app = Litestar(
     route_handlers=[
         twitter,
         reddit,
+        media,
         favicon,
-        create_static_files_router(
-            path=MEDIA_ROUTE,
-            directories=[TWITTER_MEDIA_DIR, REDDIT_MEDIA_DIR],
-        ),
     ],
     debug=True,
 )

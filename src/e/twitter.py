@@ -431,20 +431,25 @@ def generate_html(embed: Embed) -> str:
             ],
         )
 
-    # Discord plays videos through a "player" embed: an iframe pointed at the
-    # raw file. That requires og:video:type=text/html plus explicit dimensions.
     if videos:
         video = videos[0]
         width = video.width or 1280
         height = video.height or 720
         tags.extend(
             [
-                meta(name="twitter:player", content=video.url),
-                meta(name="twitter:player:width", content=str(width)),
-                meta(name="twitter:player:height", content=str(height)),
-                meta(property="og:video:type", content="text/html"),
+                meta(property="og:video", content=video.url),
+                meta(property="og:video:url", content=video.url),
+                meta(property="og:video:secure_url", content=video.url),
+                meta(property="og:video:type", content=video.content_type),
                 meta(property="og:video:width", content=str(width)),
                 meta(property="og:video:height", content=str(height)),
+                meta(name="twitter:player:stream", content=video.url),
+                meta(
+                    name="twitter:player:stream:content_type",
+                    content=video.content_type,
+                ),
+                meta(name="twitter:player:width", content=str(width)),
+                meta(name="twitter:player:height", content=str(height)),
             ],
         )
 
@@ -453,6 +458,7 @@ def generate_html(embed: Embed) -> str:
             tags.extend(
                 [
                     meta(property="og:image", content=poster),
+                    meta(property="og:image:secure_url", content=poster),
                     meta(name="twitter:image", content=poster),
                 ],
             )
