@@ -503,7 +503,7 @@ def test_route_video_uses_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
     assert f'property="og:video" content="{direct_url}"' in response.text
     assert 'property="og:video:width" content="1080"' in response.text
     assert 'property="og:video:height" content="1920"' in response.text
-    assert calls["url"].endswith("/DiscussingFilm/status/2086143411984208230")
+    assert calls["url"].endswith("/i/status/2086143411984208230")
 
 
 def test_route_image_uses_original_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -545,7 +545,7 @@ def test_route_image_uses_original_url(monkeypatch: pytest.MonkeyPatch) -> None:
     assert 'name="twitter:card" content="summary_large_image"' in response.text
     assert 'rel="alternate" type="application/activity+json"' in response.text
     assert "testserver.local/media/" not in response.text
-    assert calls["url"].endswith("/DiscussingFilm/status/2086143411984208230")
+    assert calls["url"].endswith("/i/status/2086143411984208230")
 
 
 def test_route_image_falls_back_to_download(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -609,7 +609,7 @@ def test_route_en_translates_tweet_text(monkeypatch: pytest.MonkeyPatch) -> None
     )
 
     async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
-        return KWDICT, []
+        return dict(KWDICT), []
 
     def fake_download_media(nitter_url: str) -> tuple[Path | None, list[Path]]:
         return None, [Path("1.mp4")]
@@ -629,6 +629,39 @@ def test_route_en_translates_tweet_text(monkeypatch: pytest.MonkeyPatch) -> None
     assert response.status_code == 200
     assert 'property="og:description" content="Ryan Hurst shared a photo."' in response.text
     assert 'rel="alternate" type="application/json+oembed"' in response.text
+
+
+def test_route_en_translation_used_in_activity_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the /en translation reaches the activity document."""
+    monkeypatch.setattr(
+        twitter_module,
+        "client_ip_from",
+        lambda request: ip_address("127.0.0.1"),
+    )
+
+    async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return dict(KWDICT), []
+
+    def fake_download_media(nitter_url: str) -> tuple[Path | None, list[Path]]:
+        return None, [Path("1.jpg")]
+
+    async def fake_translate_embed(embed: Embed, fields: tuple[str, ...]) -> Embed:  # ruff: ignore[unused-async]
+        assert fields == ("description",)
+        return Embed(title=embed.title, description="Translated text.", url=embed.url, media=embed.media)
+
+    monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
+    monkeypatch.setattr(twitter_module, "download_media", fake_download_media)
+    monkeypatch.setattr(twitter_module, "translate_embed", fake_translate_embed)
+    monkeypatch.setattr(twitter_module, "avatar_url_for", _fake_avatar)
+
+    with TestClient(app=app) as client:
+        page = client.get("/DiscussingFilm/status/2086143411984208230/en")
+        activity = client.get("/api/v1/statuses/2086143411984208230")
+
+    assert page.status_code == 200
+    assert activity.status_code == 200
+    assert activity.json()["content"].startswith("Translated text.")
+    assert activity.json()["content"].endswith("<br><br><b>🔁 1.2K&ensp;❤️ 34.6K</b>")
 
 
 def test_route_en_redirects_non_discord(monkeypatch: pytest.MonkeyPatch) -> None:

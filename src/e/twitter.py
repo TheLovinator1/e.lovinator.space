@@ -1043,11 +1043,13 @@ def _created_at(meta: dict[str, Any]) -> str:
 def _status_content(meta: dict[str, Any]) -> str:
     """Build the Mastodon ``content`` HTML for a tweet.
 
-    The Nitter HTML is stripped to plain text — its relative links would be
-    unusable to Discord — and newlines become ``<br>`` followed by two U+FE00
-    characters (invisible and non-whitespace, so Discord does not collapse the
-    line break). Engagement counts are appended at the end in a bold run
-    separated by ``&ensp;``, since runs of literal spaces collapse to one.
+    When the tweet was requested through an ``/en`` route, the English
+    translation cached in ``meta["translated_content"]`` is used instead of the
+    source text. The Nitter HTML is stripped to plain text — its relative
+    links would be unusable to Discord — and newlines become ``<br>`` followed
+    by two U+FE00 characters (invisible and non-whitespace, so Discord does not
+    collapse the line break). Engagement counts are appended at the end in a
+    bold run separated by ``&ensp;``.
 
     Args:
         meta: The tweet metadata from gallery-dl.
@@ -1055,7 +1057,7 @@ def _status_content(meta: dict[str, Any]) -> str:
     Returns:
         The content HTML.
     """
-    text = HTMLParser(str(meta.get("content") or "")).text(
+    text = meta.get("translated_content") or HTMLParser(str(meta.get("content") or "")).text(
         separator=" ",
         strip=True,
     )
@@ -1234,9 +1236,12 @@ async def _twitter(  # ruff: ignore[too-many-locals]
         )
 
     canonical_url = f"{ORIGINAL_URL}/{username}/status/{tweet_id}"
-    nitter_url = f"{NITTER_INSTANCE}/{username}/status/{tweet_id}"
+    # The Nitter extractor resolves tweets by ID alone, so the status document
+    # routes (which lack the username) use the same URL and share the cache.
+    nitter_url = f"{NITTER_INSTANCE}/i/status/{tweet_id}"
     logger.info("Fetching tweet from Nitter: {}", nitter_url)
 
+    meta: dict[str, Any] | None = None
     result = await fetch_meta_cached(nitter_url)
 
     if result is None:
@@ -1296,6 +1301,10 @@ async def _twitter(  # ruff: ignore[too-many-locals]
 
     if translate:
         embed = await translate_embed(embed, ("description",))
+        if meta is not None:
+            # Stash the translation in the cached metadata so the activity
+            # document route reuses it (and it lands in metadata.json).
+            meta["translated_content"] = embed.description
 
     if activity_url is not None and oembed_url is not None:
         content = generate_activity_html(
