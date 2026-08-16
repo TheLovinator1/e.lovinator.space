@@ -59,6 +59,15 @@ When unset, gallery-dl falls back to reading the token from its cache.
 REDDIT_ARCHIVE_PATH: Path = DATA_DIR / "reddit.sqlite3"
 """gallery-dl download archive database for Reddit."""
 
+REDGIFS_MEDIA_DIR: Path = DATA_DIR / "Redgifs" / "Downloads"
+"""Directory gallery-dl downloads Redgifs media into."""
+
+REDGIFS_ARCHIVE_PATH: Path = DATA_DIR / "redgifs.sqlite3"
+"""gallery-dl download archive database for Redgifs."""
+
+REDGIFS_URL: str = os.getenv("REDGIFS_URL", "https://www.redgifs.com").rstrip("/")
+"""Base URL of Redgifs, used to build links and redirects."""
+
 MEDIA_ROUTE: str = "/media"
 """Route prefix under which downloaded media files are served."""
 
@@ -79,3 +88,4 @@ TRANSLATIONS_PATH: Path = DATA_DIR / "translations.json"
 
 TWITTER_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 REDDIT_MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+REDGIFS_MEDIA_DIR.mkdir(parents=True, exist_ok=True)

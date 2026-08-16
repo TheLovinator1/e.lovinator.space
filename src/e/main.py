@@ -12,6 +12,8 @@ from litestar.response import Response
 from e.media import media
 from e.reddit import reddit
 from e.reddit import reddit_en
+from e.redgifs import redgifs
+from e.redgifs import redgifs_en
 from e.twitter import twitter
 from e.twitter import twitter_en
 
@@ -34,6 +36,8 @@ app = Litestar(
         twitter_en,
         reddit,
         reddit_en,
+        redgifs,
+        redgifs_en,
         media,
         favicon,
     ],

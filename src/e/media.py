@@ -13,6 +13,7 @@ from litestar.response import Stream
 
 from e.settings import MEDIA_ROUTE
 from e.settings import REDDIT_MEDIA_DIR
+from e.settings import REDGIFS_MEDIA_DIR
 from e.settings import TWITTER_MEDIA_DIR
 from e.twitter import content_type_for
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
 _CHUNK_SIZE = 64 * 1024
 
-MEDIA_ROOTS: tuple[Path, ...] = (TWITTER_MEDIA_DIR, REDDIT_MEDIA_DIR)
+MEDIA_ROOTS: tuple[Path, ...] = (TWITTER_MEDIA_DIR, REDDIT_MEDIA_DIR, REDGIFS_MEDIA_DIR)
 """Directories the media route serves files from."""
 
 
