@@ -21,26 +21,28 @@ def test_status_payload_shape() -> None:
     payload = status_payload(
         status_id="123",
         url="https://twitter.com/u/status/123",
-        created_at="2025-04-07T17:22:56Z",
+        created_at="2025-04-07T17:22:56.000Z",
         content="<p>hi</p>",
         account={"username": "u"},
         media=[{"type": "video", "url": "https://example.com/v.mp4"}],
-        replies_count=1,
-        reblogs_count=2,
-        favourites_count=3,
+        application={"name": "Twitter", "website": None},
     )
 
     assert payload["id"] == "123"
     assert payload["url"] == "https://twitter.com/u/status/123"
-    assert payload["created_at"] == "2025-04-07T17:22:56Z"
+    assert payload["uri"] == "https://twitter.com/u/status/123"
+    assert payload["created_at"] == "2025-04-07T17:22:56.000Z"
     assert payload["content"] == "<p>hi</p>"
     assert payload["account"] == {"username": "u"}
+    assert payload["application"] == {"name": "Twitter", "website": None}
     assert payload["media_attachments"] == [{"type": "video", "url": "https://example.com/v.mp4"}]
-    assert payload["replies_count"] == 1
-    assert payload["reblogs_count"] == 2
-    assert payload["favourites_count"] == 3
-    assert payload["sensitive"] is False
     assert payload["reblog"] is None
+    # The engagement counts are never emitted as fields; they render through
+    # content and the oEmbed author_name instead.
+    assert "replies_count" not in payload
+    assert "reblogs_count" not in payload
+    assert "favourites_count" not in payload
+    assert "sensitive" not in payload
 
 
 def test_oembed_payload_shape() -> None:

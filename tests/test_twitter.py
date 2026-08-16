@@ -329,6 +329,9 @@ def test_generate_activity_html_video_embed() -> None:
     assert 'property="twitter:creator" content="@DiscussingFilm"' in rendered
     assert 'property="twitter:player:stream" content="https://e.lovinator.space/media/1.mp4"' in rendered
     assert 'property="og:video" content="https://e.lovinator.space/media/1.mp4"' in rendered
+    assert 'name="twitter:card" content="summary_large_image"' in rendered
+    assert 'rel="canonical" href="https://twitter.com/DiscussingFilm/status/2086143411984208230"' in rendered
+    assert 'property="theme-color" content="#1d9bf0"' in rendered
     assert 'rel="icon" href="/favicon.ico"' in rendered
     assert 'rel="apple-touch-icon" href="/apple-touch-icon.png"' in rendered
     assert "og:image" not in rendered
@@ -354,6 +357,7 @@ def test_generate_activity_html_text_only_uses_avatar() -> None:
 
     assert 'property="og:image" content="https://example.com/avatar.jpg"' in rendered
     assert 'name="twitter:card" content="summary"' in rendered
+    assert 'rel="canonical" href="https://twitter.com/DiscussingFilm/status/2086143411984208230"' in rendered
 
 
 def test_download_archives_metadata_and_returns_files(monkeypatch: pytest.MonkeyPatch, tmp_dir: Path) -> None:
@@ -654,16 +658,20 @@ def test_route_serves_activity_document(monkeypatch: pytest.MonkeyPatch) -> None
         response = client.get("/users/DiscussingFilm/statuses/2086143411984208230")
 
     assert response.status_code == 200
-    assert response.headers["content-type"].startswith("application/activity+json")
+    assert response.headers["content-type"].startswith("application/json")
 
     payload = response.json()
     assert payload["id"] == "2086143411984208230"
     assert payload["url"] == "https://twitter.com/DiscussingFilm/status/2086143411984208230"
+    assert payload["uri"] == payload["url"]
     assert "🔁 1.2K   ❤️ 34.6K" in payload["content"]
     assert payload["content"].endswith("makeup as Kratos.</p>")
-    assert payload["reblogs_count"] == 1234
-    assert payload["favourites_count"] == 34567
+    assert payload["application"] == {"name": "Twitter", "website": None}
+    assert "replies_count" not in payload
+    assert "reblogs_count" not in payload
+    assert "favourites_count" not in payload
     assert payload["account"]["acct"] == "DiscussingFilm"
+    assert payload["account"]["uri"] == "https://twitter.com/DiscussingFilm"
     assert payload["account"]["avatar"] == "https://example.com/avatar.jpg"
     assert payload["account"]["url"] == "https://twitter.com/DiscussingFilm"
 
@@ -688,6 +696,7 @@ def test_route_serves_api_v1_status_document(monkeypatch: pytest.MonkeyPatch) ->
         response = client.get("/api/v1/statuses/2088615278074900973")
 
     assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
     payload = response.json()
     assert payload["id"] == "2088615278074900973"
     assert payload["url"] == "https://twitter.com/noa_mpfentame/status/2088615278074900973"
@@ -719,11 +728,25 @@ def test_route_activity_document_includes_media(monkeypatch: pytest.MonkeyPatch)
     payload = response.json()
     assert payload["media_attachments"] == [
         {
+            "id": "0",
             "type": "image",
             "url": "https://pbs.twimg.com/media/a.jpg",
             "preview_url": "https://pbs.twimg.com/media/a.jpg",
+            "remote_url": None,
+            "preview_remote_url": None,
+            "text_url": None,
+            "description": None,
         },
-        {"type": "video", "url": "https://nitter.net/video/abc.mp4"},
+        {
+            "id": "1",
+            "type": "video",
+            "url": "https://nitter.net/video/abc.mp4",
+            "preview_url": None,
+            "remote_url": None,
+            "preview_remote_url": None,
+            "text_url": None,
+            "description": None,
+        },
     ]
 
 

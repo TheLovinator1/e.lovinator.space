@@ -65,11 +65,14 @@ def status_payload(  # ruff: ignore[too-many-arguments]
     content: str,
     account: dict[str, Any],
     media: list[dict[str, Any]],
-    replies_count: int | None = None,
-    reblogs_count: int | None = None,
-    favourites_count: int | None = None,
+    application: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a Mastodon API ``Status`` document.
+
+    Field names — and equally which fields are ABSENT — follow the wire format
+    Discord's crawler accepts for Mastodon pages: notably the engagement counts
+    are rendered through ``content`` and the oEmbed ``author_name``, and must
+    never appear as ``replies_count``/``reblogs_count``/``favourites_count``.
 
     Args:
         status_id: The numeric status id.
@@ -78,9 +81,7 @@ def status_payload(  # ruff: ignore[too-many-arguments]
         content: HTML body, including any engagement counts.
         account: Mastodon ``Account`` document.
         media: List of ``MediaAttachment`` documents.
-        replies_count: Number of replies.
-        reblogs_count: Number of reposts.
-        favourites_count: Number of favourites.
+        application: The client application document.
 
     Returns:
         The Status document, shaped after
@@ -88,23 +89,20 @@ def status_payload(  # ruff: ignore[too-many-arguments]
     """
     return {
         "id": str(status_id),
+        "url": url,
+        "uri": url,
         "created_at": created_at,
+        "edited_at": None,
+        "reblog": None,
         "in_reply_to_id": None,
         "in_reply_to_account_id": None,
-        "sensitive": False,
+        "language": None,
+        "content": content,
         "spoiler_text": "",
         "visibility": "public",
-        "language": None,
-        "uri": url,
-        "url": url,
-        "replies_count": replies_count or 0,
-        "reblogs_count": reblogs_count or 0,
-        "favourites_count": favourites_count or 0,
-        "edited_at": None,
-        "content": content,
-        "reblog": None,
-        "account": account,
+        "application": application or {"name": "Twitter", "website": None},
         "media_attachments": media,
+        "account": account,
         "mentions": [],
         "tags": [],
         "emojis": [],

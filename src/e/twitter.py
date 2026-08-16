@@ -6,6 +6,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from datetime import UTC
 from datetime import datetime
 from ipaddress import IPv4Address
 from ipaddress import IPv6Address
@@ -236,7 +237,7 @@ def _fetch_profile(username: str) -> str | None:
         headers={"User-Agent": "Mozilla/5.0 (compatible; e.lovinator.space)"},
     )
     response.raise_for_status()
-    return avatar_from_profile(response.text)
+    return avatar_from_profile(response.text)  # pyright: ignore[reportArgumentType]
 
 
 async def avatar_url_for(username: str) -> str | None:
@@ -823,7 +824,7 @@ def generate_activity_html(
     images = [media for media in embed.media if not media.is_video]
 
     tags = [
-        meta(name="theme-color", content="#1d9bf0"),
+        meta(property="theme-color", content="#1d9bf0"),
         meta(property="og:site_name", content="e.lovinator.space"),
         meta(property="og:title", content=embed.title),
         meta(property="og:url", content=embed.url),
@@ -855,6 +856,7 @@ def generate_activity_html(
                 ),
                 meta(property="twitter:player:width", content=str(width)),
                 meta(property="twitter:player:height", content=str(height)),
+                meta(name="twitter:card", content="summary_large_image"),
             ],
         )
     elif images:
@@ -874,6 +876,7 @@ def generate_activity_html(
             head[
                 meta(name="viewport", content="width=device-width, initial-scale=1.0"),
                 *tags,
+                link(rel="canonical", href=embed.url),
                 link(rel="alternate", type="application/activity+json", href=activity_url),
                 link(rel="alternate", type="application/json+oembed", href=oembed_url),
                 link(rel="icon", href="/favicon.ico"),
@@ -899,15 +902,42 @@ def _media_attachments(media_items: list[dict[str, Any]]) -> list[dict[str, Any]
         url = item.get("url") or ""
         if url.startswith("ytdl:"):
             continue
+
+        attachment: dict[str, Any] = {
+            "id": str(len(attachments)),
+            "url": url,
+            "preview_url": None,
+            "remote_url": None,
+            "preview_remote_url": None,
+            "text_url": None,
+            "description": None,
+        }
         if CONTENT_TYPES.get(extension, "").startswith("image/"):
-            original = original_image_url(url) or url
-            attachments.append({"type": "image", "url": original, "preview_url": original})
+            attachment["type"] = "image"
+            attachment["url"] = original_image_url(url) or url
+            attachment["preview_url"] = attachment["url"]
         elif extension == "mp4":
-            attachments.append({"type": "video", "url": url})
+            attachment["type"] = "video"
+            width, height = _video_dimensions(url)
+            if width is not None and height is not None:
+                attachment["meta"] = {
+                    "original": {
+                        "width": width,
+                        "height": height,
+                        "size": f"{width}x{height}",
+                        "aspect": width / height,
+                    },
+                }
+        attachments.append(attachment)
     return attachments
 
 
-def _account_document(meta: dict[str, Any], username: str, avatar: str | None) -> dict[str, Any]:
+def _account_document(
+    meta: dict[str, Any],
+    username: str,
+    avatar: str | None,
+    created_at: str,
+) -> dict[str, Any]:
     """Build a Mastodon ``Account`` document for a tweet's author.
 
     The Nitter extractor puts the handle in ``author.name`` and the display
@@ -917,6 +947,7 @@ def _account_document(meta: dict[str, Any], username: str, avatar: str | None) -
         meta: The tweet metadata from gallery-dl.
         username: The canonical handle without the ``@``.
         avatar: The resolved profile image URL, if any.
+        created_at: ISO-8601 timestamp, a stand-in for the join date.
 
     Returns:
         The Account document.
@@ -927,24 +958,27 @@ def _account_document(meta: dict[str, Any], username: str, avatar: str | None) -
     display_name = nick or name or "Twitter"
     return {
         "id": username,
+        "display_name": display_name,
         "username": username,
         "acct": username,
-        "display_name": display_name,
+        "url": f"https://twitter.com/{username}",
+        "uri": f"https://twitter.com/{username}",
+        "created_at": created_at,
         "locked": False,
         "bot": False,
         "discoverable": True,
+        "indexable": False,
         "group": False,
-        "created_at": "1970-01-01T00:00:00.000Z",
-        "note": "",
-        "url": f"https://twitter.com/{username}",
         "avatar": avatar or "",
         "avatar_static": avatar or "",
-        "header": "",
-        "header_static": "",
         "followers_count": 0,
         "following_count": 0,
         "statuses_count": 0,
-        "last_status_at": None,
+        "hide_collections": False,
+        "noindex": False,
+        "emojis": [],
+        "roles": [],
+        "fields": [],
     }
 
 
@@ -960,8 +994,8 @@ def _created_at(meta: dict[str, Any]) -> str:
     created_at = meta.get("date")
     if isinstance(created_at, datetime):
         if created_at.tzinfo is None:
-            return created_at.isoformat() + "Z"
-        return created_at.isoformat()
+            return created_at.isoformat(timespec="milliseconds") + "Z"
+        return created_at.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     return str(created_at or "")
 
 
@@ -1304,22 +1338,20 @@ async def _status_document(
     meta, media_items = result
     handle = _tweet_handle(meta, username)
     avatar = await avatar_url_for(handle)
+    created_at = _created_at(meta)
 
     payload = status_payload(
         status_id=tweet_id,
         url=f"{ORIGINAL_URL}/{handle}/status/{tweet_id}",
-        created_at=_created_at(meta),
+        created_at=created_at,
         content=_status_content(meta),
-        account=_account_document(meta, handle, avatar),
+        account=_account_document(meta, handle, avatar, created_at),
         media=_media_attachments(media_items),
-        replies_count=meta.get("comments"),
-        reblogs_count=meta.get("retweets"),
-        favourites_count=meta.get("likes"),
     )
 
     return Response(
         content=json.dumps(payload),
-        media_type="application/activity+json",
+        media_type="application/json",
     )
 
 
