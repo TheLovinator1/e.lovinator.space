@@ -647,11 +647,15 @@ def build_embed(  # ruff: ignore[too-many-arguments]
         An embed ready to render as Open Graph HTML.
     """
     author = meta.get("author") or meta.get("user") or {}
-    name = str(author.get("name") or "").strip() or "Twitter"
-    username = str(author.get("nick") or "").strip()
+    name = str(author.get("name") or "").strip().lstrip("@")
+    nick = str(author.get("nick") or "").strip()
 
-    title = f"{name} ({username})" if username else name
-    handle = f"@{username.lstrip('@')}" if username else None
+    if name:
+        title = f"{nick} (@{name})" if nick else f"@{name}"
+        handle = f"@{name}"
+    else:
+        title = nick or "Twitter"
+        handle = None
 
     stats: tuple[tuple[str, str], ...] = ()
     if (retweets := meta.get("retweets")) is not None:
@@ -906,6 +910,9 @@ def _media_attachments(media_items: list[dict[str, Any]]) -> list[dict[str, Any]
 def _account_document(meta: dict[str, Any], username: str, avatar: str | None) -> dict[str, Any]:
     """Build a Mastodon ``Account`` document for a tweet's author.
 
+    The Nitter extractor puts the handle in ``author.name`` and the display
+    name in ``author.nick``.
+
     Args:
         meta: The tweet metadata from gallery-dl.
         username: The canonical handle without the ``@``.
@@ -915,12 +922,14 @@ def _account_document(meta: dict[str, Any], username: str, avatar: str | None) -
         The Account document.
     """
     author = meta.get("author") or meta.get("user") or {}
-    name = str(author.get("name") or "").strip() or "Twitter"
+    name = str(author.get("name") or "").strip().lstrip("@")
+    nick = str(author.get("nick") or "").strip()
+    display_name = nick or name or "Twitter"
     return {
         "id": username,
         "username": username,
         "acct": username,
-        "display_name": name,
+        "display_name": display_name,
         "locked": False,
         "bot": False,
         "discoverable": True,
@@ -982,6 +991,9 @@ def _status_content(meta: dict[str, Any]) -> str:
 def _tweet_handle(meta: dict[str, Any], fallback: str) -> str:
     """Return the canonical handle for a tweet's author.
 
+    The Nitter extractor puts the handle in ``author.name`` and the display
+    name in ``author.nick``.
+
     Args:
         meta: The tweet metadata from gallery-dl.
         fallback: Handle from the request URL, used when metadata is missing.
@@ -990,8 +1002,8 @@ def _tweet_handle(meta: dict[str, Any], fallback: str) -> str:
         The handle without the ``@``.
     """
     author = meta.get("author") or meta.get("user") or {}
-    nick = str(author.get("nick") or "").strip().lstrip("@")
-    return nick or fallback
+    handle = str(author.get("name") or "").strip().lstrip("@")
+    return handle or fallback
 
 
 def client_ip_from(request: Request) -> IPv4Address | IPv6Address | None:
@@ -1219,6 +1231,26 @@ async def _twitter(  # ruff: ignore[too-many-locals]
     )
 
 
+@get("/api/v1/statuses/{tweet_id:str}")
+async def tweet_status_api(
+    request: Request,
+    tweet_id: Annotated[str, PathParameter()],
+) -> Response:
+    """Serve a Mastodon API ``Status`` document for a tweet.
+
+    Discord's crawler probes this REST endpoint in addition to the alternate
+    links on the embed page; the document matches the activity one.
+
+    Args:
+        request: The incoming request.
+        tweet_id: The status ID of the tweet.
+
+    Returns:
+        The Status document as JSON.
+    """
+    return await _status_document(request, tweet_id)
+
+
 @get("/users/{username:str}/statuses/{tweet_id:str}")
 async def users_statuses(
     request: Request,
@@ -1239,7 +1271,28 @@ async def users_statuses(
     Returns:
         The Status document as JSON.
     """
-    nitter_url = f"{NITTER_INSTANCE}/{username}/status/{tweet_id}"
+    return await _status_document(request, tweet_id, username)
+
+
+async def _status_document(
+    request: Request,
+    tweet_id: str,
+    username: str = "",
+) -> Response:
+    """Build a Mastodon API ``Status`` document for a tweet.
+
+    The Nitter extractor resolves tweets by ID alone (``/i/status/{id}``), so
+    the username is only a fallback when the metadata lacks the author.
+
+    Args:
+        request: The incoming request.
+        tweet_id: The status ID of the tweet.
+        username: The Twitter/X handle, used when the metadata is incomplete.
+
+    Returns:
+        The Status document as JSON, or 404 when the tweet cannot be fetched.
+    """
+    nitter_url = f"{NITTER_INSTANCE}/i/status/{tweet_id}"
     result = await fetch_meta_cached(nitter_url)
     if result is None:
         return Response(
@@ -1289,7 +1342,7 @@ async def tweet_oembed(
     Returns:
         The oEmbed document as JSON.
     """
-    nitter_url = f"{NITTER_INSTANCE}/{username}/status/{tweet_id}"
+    nitter_url = f"{NITTER_INSTANCE}/i/status/{tweet_id}"
     result = await fetch_meta_cached(nitter_url)
     if result is None:
         return Response(

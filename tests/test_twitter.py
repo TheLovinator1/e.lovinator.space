@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     import pytest
 
 KWDICT: dict[str, Any] = {
-    "author": {"name": "DiscussingFilm", "nick": "@DiscussingFilm"},
+    "author": {"name": "DiscussingFilm", "nick": "DiscussingFilm"},
     "tweet_id": "2086143411984208230",
     "retweets": 1234,
     "likes": 34567,
@@ -668,6 +668,36 @@ def test_route_serves_activity_document(monkeypatch: pytest.MonkeyPatch) -> None
     assert payload["account"]["url"] == "https://twitter.com/DiscussingFilm"
 
 
+def test_route_serves_api_v1_status_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the Mastodon REST endpoint serves a Status document by ID."""
+    monkeypatch.setattr(twitter_module, "avatar_url_for", _fake_avatar)
+
+    meta = {
+        **KWDICT,
+        "author": {"name": "noa_mpfentame", "nick": "のあ🫧MPF☆Bみずいろ担当💎"},
+    }
+
+    async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        # The Nitter extractor resolves statuses by ID alone.
+        assert nitter_url == "https://nitter.net/i/status/2088615278074900973"
+        return dict(meta), []
+
+    monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
+
+    with TestClient(app=app) as client:
+        response = client.get("/api/v1/statuses/2088615278074900973")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == "2088615278074900973"
+    assert payload["url"] == "https://twitter.com/noa_mpfentame/status/2088615278074900973"
+    # The handle comes from author.name; the display name from author.nick.
+    assert payload["account"]["acct"] == "noa_mpfentame"
+    assert payload["account"]["username"] == "noa_mpfentame"
+    assert payload["account"]["display_name"] == "のあ🫧MPF☆Bみずいろ担当💎"
+    assert payload["account"]["url"] == "https://twitter.com/noa_mpfentame"
+
+
 def test_route_activity_document_includes_media(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that the activity document carries image and video attachments."""
     monkeypatch.setattr(twitter_module, "avatar_url_for", _fake_avatar)
@@ -728,8 +758,10 @@ def test_route_activity_document_404(monkeypatch: pytest.MonkeyPatch) -> None:
 
     with TestClient(app=app) as client:
         activity = client.get("/users/DiscussingFilm/statuses/999")
+        api = client.get("/api/v1/statuses/999")
         oembed = client.get("/_oembed/DiscussingFilm/999")
 
     assert activity.status_code == 404
+    assert api.status_code == 404
     assert oembed.status_code == 404
-    assert activity.json() == {"error": "Not Found"}
+    assert api.json() == {"error": "Not Found"}

@@ -16,6 +16,7 @@ from e.reddit import reddit_en
 from e.redgifs import redgifs
 from e.redgifs import redgifs_en
 from e.twitter import tweet_oembed
+from e.twitter import tweet_status_api
 from e.twitter import twitter
 from e.twitter import twitter_en
 from e.twitter import users_statuses
@@ -69,6 +70,7 @@ app = Litestar(
         redgifs,
         redgifs_en,
         users_statuses,
+        tweet_status_api,
         tweet_oembed,
         media,
         favicon,
