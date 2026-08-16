@@ -39,13 +39,16 @@ def engagement_text(
     comments: int | None = None,
     retweets: int | None = None,
     likes: int | None = None,
+    separator: str = "   ",
 ) -> str:
-    """Format engagement counts the way Discord renders them in the body.
+    """Format engagement counts the way Discord renders them.
 
     Args:
         comments: Number of replies.
         retweets: Number of reposts.
         likes: Number of favourites.
+        separator: String placed between the metrics. Use ``&ensp;`` for HTML
+            content, where runs of literal spaces are collapsed to one.
 
     Returns:
         e.g. ``💬 5   🔁 14   ❤️ 140``, with zero or missing metrics omitted.
@@ -54,7 +57,7 @@ def engagement_text(
     for value, emoji in ((comments, "💬"), (retweets, "🔁"), (likes, "❤️")):
         if isinstance(value, int) and value > 0:
             parts.append(f"{emoji} {compact_number(value)}")
-    return "   ".join(parts)
+    return separator.join(parts)
 
 
 def status_payload(  # ruff: ignore[too-many-arguments]

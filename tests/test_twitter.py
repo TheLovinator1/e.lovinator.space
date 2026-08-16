@@ -329,7 +329,8 @@ def test_generate_activity_html_video_embed() -> None:
     assert 'property="twitter:creator" content="@DiscussingFilm"' in rendered
     assert 'property="twitter:player:stream" content="https://e.lovinator.space/media/1.mp4"' in rendered
     assert 'property="og:video" content="https://e.lovinator.space/media/1.mp4"' in rendered
-    assert 'name="twitter:card" content="summary_large_image"' in rendered
+    assert 'name="twitter:card" content="player"' in rendered
+    assert 'name="twitter:image" content="0"' in rendered
     assert 'rel="canonical" href="https://twitter.com/DiscussingFilm/status/2086143411984208230"' in rendered
     assert 'property="theme-color" content="#1d9bf0"' in rendered
     assert 'rel="icon" href="/favicon.ico"' in rendered
@@ -356,6 +357,7 @@ def test_generate_activity_html_text_only_uses_avatar() -> None:
     )
 
     assert 'property="og:image" content="https://example.com/avatar.jpg"' in rendered
+    assert 'name="twitter:image" content="0"' in rendered
     assert 'name="twitter:card" content="summary"' in rendered
     assert 'rel="canonical" href="https://twitter.com/DiscussingFilm/status/2086143411984208230"' in rendered
 
@@ -664,16 +666,17 @@ def test_route_serves_activity_document(monkeypatch: pytest.MonkeyPatch) -> None
     assert payload["id"] == "2086143411984208230"
     assert payload["url"] == "https://twitter.com/DiscussingFilm/status/2086143411984208230"
     assert payload["uri"] == payload["url"]
-    assert "🔁 1.2K   ❤️ 34.6K" in payload["content"]
-    assert payload["content"].endswith("makeup as Kratos.</p>")
+    assert "🔁 1.2K&ensp;❤️ 34.6K" in payload["content"]
+    assert payload["content"].startswith("Ryan Hurst has shared")
+    assert payload["content"].endswith("<br><br><b>🔁 1.2K&ensp;❤️ 34.6K</b>")
     assert payload["application"] == {"name": "Twitter", "website": None}
     assert "replies_count" not in payload
     assert "reblogs_count" not in payload
     assert "favourites_count" not in payload
     assert payload["account"]["acct"] == "DiscussingFilm"
-    assert payload["account"]["uri"] == "https://twitter.com/DiscussingFilm"
+    assert payload["account"]["uri"] == "https://twitter.com/DiscussingFilm/status/2086143411984208230"
     assert payload["account"]["avatar"] == "https://example.com/avatar.jpg"
-    assert payload["account"]["url"] == "https://twitter.com/DiscussingFilm"
+    assert payload["account"]["url"] == "https://twitter.com/DiscussingFilm/status/2086143411984208230"
 
 
 def test_route_serves_api_v1_status_document(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -704,7 +707,8 @@ def test_route_serves_api_v1_status_document(monkeypatch: pytest.MonkeyPatch) ->
     assert payload["account"]["acct"] == "noa_mpfentame"
     assert payload["account"]["username"] == "noa_mpfentame"
     assert payload["account"]["display_name"] == "のあ🫧MPF☆Bみずいろ担当💎"
-    assert payload["account"]["url"] == "https://twitter.com/noa_mpfentame"
+    assert payload["account"]["url"] == "https://twitter.com/noa_mpfentame/status/2088615278074900973"
+    assert payload["account"]["uri"] == payload["account"]["url"]
 
 
 def test_route_activity_document_includes_media(monkeypatch: pytest.MonkeyPatch) -> None:

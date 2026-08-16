@@ -652,7 +652,9 @@ def build_embed(  # ruff: ignore[too-many-arguments]
     nick = str(author.get("nick") or "").strip()
 
     if name:
-        title = f"{nick} (@{name})" if nick else f"@{name}"
+        # Discord only renders the Mastodon-style author when the title is
+        # exactly "display name (@handle)" — with the space.
+        title = f"{nick or name} (@{name})"
         handle = f"@{name}"
     else:
         title = nick or "Twitter"
@@ -840,8 +842,7 @@ def generate_activity_html(
 
     if videos:
         video = videos[0]
-        width = video.width or 1280
-        height = video.height or 720
+        width, height = _scaled_dimensions(video.width or 1280, video.height or 720)
         tags.extend(
             [
                 meta(property="og:video", content=video.url),
@@ -856,17 +857,20 @@ def generate_activity_html(
                 ),
                 meta(property="twitter:player:width", content=str(width)),
                 meta(property="twitter:player:height", content=str(height)),
-                meta(name="twitter:card", content="summary_large_image"),
+                meta(name="twitter:card", content="player"),
+                meta(name="twitter:image", content="0"),
             ],
         )
     elif images:
         # Image posts: no og:image, so Discord keeps the activity card.
         tags.append(meta(name="twitter:card", content="summary_large_image"))
     elif avatar_url:
-        # Text-only posts: the avatar acts as the embed image.
+        # Text-only posts: the avatar acts as the embed image; twitter:image
+        # "0" tells Discord not to draw an image card of its own.
         tags.extend(
             [
                 meta(property="og:image", content=avatar_url),
+                meta(name="twitter:image", content="0"),
                 meta(name="twitter:card", content="summary"),
             ],
         )
@@ -884,6 +888,33 @@ def generate_activity_html(
             ],
         ],
     )
+
+
+_MAX_VIDEO_DIMENSION = 1920
+"""Largest video dimension Discord renders at full size."""
+
+_MIN_VIDEO_DIMENSION = 400
+"""Smallest video dimension Discord renders at full size."""
+
+
+def _scaled_dimensions(width: int, height: int) -> tuple[int, int]:
+    """Scale video dimensions to Discord's supported range.
+
+    Discord refuses to render videos wider or taller than 1920 pixels and
+    renders very small videos as tiny embeds.
+
+    Args:
+        width: The video width in pixels.
+        height: The video height in pixels.
+
+    Returns:
+        The scaled dimensions.
+    """
+    if width > _MAX_VIDEO_DIMENSION or height > _MAX_VIDEO_DIMENSION:
+        return width // 2, height // 2
+    if width < _MIN_VIDEO_DIMENSION and height < _MIN_VIDEO_DIMENSION:
+        return width * 2, height * 2
+    return width, height
 
 
 def _media_attachments(media_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -920,6 +951,7 @@ def _media_attachments(media_items: list[dict[str, Any]]) -> list[dict[str, Any]
             attachment["type"] = "video"
             width, height = _video_dimensions(url)
             if width is not None and height is not None:
+                width, height = _scaled_dimensions(width, height)
                 attachment["meta"] = {
                     "original": {
                         "width": width,
@@ -937,17 +969,20 @@ def _account_document(
     username: str,
     avatar: str | None,
     created_at: str,
+    url: str,
 ) -> dict[str, Any]:
     """Build a Mastodon ``Account`` document for a tweet's author.
 
     The Nitter extractor puts the handle in ``author.name`` and the display
-    name in ``author.nick``.
+    name in ``author.nick``. The account URL points at the status page, which
+    is where Discord navigates when the account section is clicked.
 
     Args:
         meta: The tweet metadata from gallery-dl.
         username: The canonical handle without the ``@``.
         avatar: The resolved profile image URL, if any.
         created_at: ISO-8601 timestamp, a stand-in for the join date.
+        url: The canonical URL of the status.
 
     Returns:
         The Account document.
@@ -961,8 +996,8 @@ def _account_document(
         "display_name": display_name,
         "username": username,
         "acct": username,
-        "url": f"https://twitter.com/{username}",
-        "uri": f"https://twitter.com/{username}",
+        "url": url,
+        "uri": url,
         "created_at": created_at,
         "locked": False,
         "bot": False,
@@ -971,6 +1006,8 @@ def _account_document(
         "group": False,
         "avatar": avatar or "",
         "avatar_static": avatar or "",
+        "header": "",
+        "header_static": "",
         "followers_count": 0,
         "following_count": 0,
         "statuses_count": 0,
@@ -1002,8 +1039,10 @@ def _created_at(meta: dict[str, Any]) -> str:
 def _status_content(meta: dict[str, Any]) -> str:
     """Build the Mastodon ``content`` HTML for a tweet.
 
-    Engagement counts are prepended in a bold paragraph, which Discord renders
-    with its own emoji artwork.
+    Newlines become ``<br>`` followed by two U+FE00 characters — invisible and
+    non-whitespace, so Discord does not collapse the line break. Engagement
+    counts are appended at the end in a bold run separated by ``&ensp;``, since
+    runs of literal spaces would be collapsed to a single space.
 
     Args:
         meta: The tweet metadata from gallery-dl.
@@ -1011,15 +1050,16 @@ def _status_content(meta: dict[str, Any]) -> str:
     Returns:
         The content HTML.
     """
-    text = str(meta.get("content") or "")
+    text = str(meta.get("content") or "").replace("\n", "<br>\ufe00\ufe00")
     counts = engagement_text(
         comments=meta.get("comments"),
         retweets=meta.get("retweets"),
         likes=meta.get("likes"),
+        separator="&ensp;",
     )
     if counts:
-        return f"<p><b>{counts}</b></p><p>{text}</p>"
-    return f"<p>{text}</p>"
+        return f"{text}<br><br><b>{counts}</b>"
+    return text
 
 
 def _tweet_handle(meta: dict[str, Any], fallback: str) -> str:
@@ -1339,13 +1379,14 @@ async def _status_document(
     handle = _tweet_handle(meta, username)
     avatar = await avatar_url_for(handle)
     created_at = _created_at(meta)
+    url = f"{ORIGINAL_URL}/{handle}/status/{tweet_id}"
 
     payload = status_payload(
         status_id=tweet_id,
-        url=f"{ORIGINAL_URL}/{handle}/status/{tweet_id}",
+        url=url,
         created_at=created_at,
         content=_status_content(meta),
-        account=_account_document(meta, handle, avatar, created_at),
+        account=_account_document(meta, handle, avatar, created_at, url),
         media=_media_attachments(media_items),
     )
 

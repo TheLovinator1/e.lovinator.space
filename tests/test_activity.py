@@ -16,6 +16,11 @@ def test_engagement_text_omits_zero_and_missing() -> None:
     assert engagement_text(likes=1249683) == "❤️ 1.2M"
 
 
+def test_engagement_text_separator() -> None:
+    """Test that the separator is customizable for HTML content."""
+    assert engagement_text(comments=5, retweets=14, likes=140, separator="&ensp;") == "💬 5&ensp;🔁 14&ensp;❤️ 140"
+
+
 def test_status_payload_shape() -> None:
     """Test the Mastodon Status document shape."""
     payload = status_payload(
