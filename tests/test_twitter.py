@@ -301,6 +301,13 @@ def test_avatar_from_profile() -> None:
     assert avatar_from_profile("<html><body></body></html>") is None
 
 
+def test_avatar_from_profile_absolutizes_relative_url() -> None:
+    """Test that a proxied avatar path is resolved against the Nitter root."""
+    page = '<img class="avatar" src="/pic/profile_images/abc_bigger.jpg" />'
+
+    assert avatar_from_profile(page) == "https://nitter.net/pic/profile_images/abc_400x400.jpg"
+
+
 def test_generate_activity_html_video_embed() -> None:
     """Test that the Mastodon-style head links the activity documents."""
     embed = Embed(
@@ -667,8 +674,10 @@ def test_route_serves_activity_document(monkeypatch: pytest.MonkeyPatch) -> None
     assert payload["url"] == "https://twitter.com/DiscussingFilm/status/2086143411984208230"
     assert payload["uri"] == payload["url"]
     assert "🔁 1.2K&ensp;❤️ 34.6K" in payload["content"]
-    assert payload["content"].startswith("Ryan Hurst has shared")
+    assert payload["content"].startswith("Ryan Hurst has shared a photo")
     assert payload["content"].endswith("<br><br><b>🔁 1.2K&ensp;❤️ 34.6K</b>")
+    # The Nitter HTML is stripped to plain text (no relative links).
+    assert "<a href" not in payload["content"]
     assert payload["application"] == {"name": "Twitter", "website": None}
     assert "replies_count" not in payload
     assert "reblogs_count" not in payload
@@ -677,6 +686,7 @@ def test_route_serves_activity_document(monkeypatch: pytest.MonkeyPatch) -> None
     assert payload["account"]["uri"] == "https://twitter.com/DiscussingFilm/status/2086143411984208230"
     assert payload["account"]["avatar"] == "https://example.com/avatar.jpg"
     assert payload["account"]["url"] == "https://twitter.com/DiscussingFilm/status/2086143411984208230"
+    assert "header" not in payload["account"]
 
 
 def test_route_serves_api_v1_status_document(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -752,6 +762,37 @@ def test_route_activity_document_includes_media(monkeypatch: pytest.MonkeyPatch)
             "description": None,
         },
     ]
+
+
+def test_account_document_omits_missing_images() -> None:
+    """Test that image fields are omitted when there is no avatar."""
+    document = twitter_module._account_document(
+        KWDICT,
+        "DiscussingFilm",
+        None,
+        "2025-01-01T00:00:00.000Z",
+        "https://twitter.com/DiscussingFilm/status/2086143411984208230",
+    )
+
+    assert "avatar" not in document
+    assert "avatar_static" not in document
+    assert "header" not in document
+    assert "header_static" not in document
+    assert document["acct"] == "DiscussingFilm"
+
+
+def test_account_document_includes_avatar_when_present() -> None:
+    """Test that the avatar fields are emitted when an avatar is known."""
+    document = twitter_module._account_document(
+        KWDICT,
+        "DiscussingFilm",
+        "https://example.com/avatar.jpg",
+        "2025-01-01T00:00:00.000Z",
+        "https://twitter.com/DiscussingFilm/status/2086143411984208230",
+    )
+
+    assert document["avatar"] == "https://example.com/avatar.jpg"
+    assert document["avatar_static"] == "https://example.com/avatar.jpg"
 
 
 def test_route_serves_oembed(monkeypatch: pytest.MonkeyPatch) -> None:

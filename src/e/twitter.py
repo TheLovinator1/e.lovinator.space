@@ -219,6 +219,8 @@ def avatar_from_profile(html: str) -> str | None:
     if match is None:
         return None
     url = html_module.unescape(match.group(1))
+    if url.startswith("/"):
+        url = f"{NITTER_INSTANCE.rstrip('/')}/{url.lstrip('/')}"
     return url.replace("_bigger.", "_400x400.") if "_bigger." in url else url
 
 
@@ -991,7 +993,7 @@ def _account_document(
     name = str(author.get("name") or "").strip().lstrip("@")
     nick = str(author.get("nick") or "").strip()
     display_name = nick or name or "Twitter"
-    return {
+    document: dict[str, Any] = {
         "id": username,
         "display_name": display_name,
         "username": username,
@@ -1004,10 +1006,6 @@ def _account_document(
         "discoverable": True,
         "indexable": False,
         "group": False,
-        "avatar": avatar or "",
-        "avatar_static": avatar or "",
-        "header": "",
-        "header_static": "",
         "followers_count": 0,
         "following_count": 0,
         "statuses_count": 0,
@@ -1017,6 +1015,12 @@ def _account_document(
         "roles": [],
         "fields": [],
     }
+    # Omit the image fields when there is no image: Discord treats an empty
+    # string as an invalid URL rather than "no image".
+    if avatar:
+        document["avatar"] = avatar
+        document["avatar_static"] = avatar
+    return document
 
 
 def _created_at(meta: dict[str, Any]) -> str:
@@ -1039,10 +1043,11 @@ def _created_at(meta: dict[str, Any]) -> str:
 def _status_content(meta: dict[str, Any]) -> str:
     """Build the Mastodon ``content`` HTML for a tweet.
 
-    Newlines become ``<br>`` followed by two U+FE00 characters — invisible and
-    non-whitespace, so Discord does not collapse the line break. Engagement
-    counts are appended at the end in a bold run separated by ``&ensp;``, since
-    runs of literal spaces would be collapsed to a single space.
+    The Nitter HTML is stripped to plain text — its relative links would be
+    unusable to Discord — and newlines become ``<br>`` followed by two U+FE00
+    characters (invisible and non-whitespace, so Discord does not collapse the
+    line break). Engagement counts are appended at the end in a bold run
+    separated by ``&ensp;``, since runs of literal spaces collapse to one.
 
     Args:
         meta: The tweet metadata from gallery-dl.
@@ -1050,7 +1055,11 @@ def _status_content(meta: dict[str, Any]) -> str:
     Returns:
         The content HTML.
     """
-    text = str(meta.get("content") or "").replace("\n", "<br>\ufe00\ufe00")
+    text = HTMLParser(str(meta.get("content") or "")).text(
+        separator=" ",
+        strip=True,
+    )
+    text = text.replace("\n", "<br>\ufe00\ufe00")
     counts = engagement_text(
         comments=meta.get("comments"),
         retweets=meta.get("retweets"),
