@@ -24,6 +24,7 @@ from e.twitter import Embed
 from e.twitter import Media
 from e.twitter import base_url_for
 from e.twitter import client_ip_from
+from e.twitter import compact_number
 from e.twitter import content_type_for
 from e.twitter import download_directory
 from e.twitter import extract_data
@@ -313,8 +314,17 @@ def build_embed(  # ruff: ignore[too-many-arguments]
     title = f"{user_name} on Redgifs" if user_name else "Redgifs"
 
     description = str(meta.get("description") or "").strip()
-    if not description:
-        description = ", ".join(str(tag) for tag in (meta.get("tags") or []))
+    tags = ", ".join(str(tag) for tag in (meta.get("tags") or []))
+    if description and tags:
+        description = f"{description}\n\nTags: {tags}"
+    elif not description:
+        description = tags
+
+    stats: tuple[tuple[str, str], ...] = ()
+    if (views := meta.get("views")) is not None:
+        stats += (("Views", compact_number(views)),)
+    if (likes := meta.get("likes")) is not None:
+        stats += (("Likes", compact_number(likes)),)
 
     width = meta.get("width")
     height = meta.get("height")
@@ -341,6 +351,7 @@ def build_embed(  # ruff: ignore[too-many-arguments]
         url=canonical_url,
         media=media,
         poster=poster,
+        stats=stats,
     )
 
 

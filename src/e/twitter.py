@@ -94,6 +94,18 @@ class Embed:
     poster: str | None = None
     """Thumbnail URL shown for video embeds."""
 
+    site: str | None = None
+    """Author handle for the ``twitter:site`` tag."""
+
+    creator: str | None = None
+    """Author handle for the ``twitter:creator`` tag."""
+
+    stats: tuple[tuple[str, str], ...] = ()
+    """(label, value) pairs rendered as ``twitter:labelN``/``twitter:dataN``.
+
+    Discord renders the first two pairs as fields in the embed.
+    """
+
 
 def configure_extractor() -> None:
     """Configure gallery-dl's Nitter extractor."""
@@ -162,6 +174,38 @@ def is_media_file(path: Path) -> bool:
         ``True`` if the file has a supported media extension.
     """
     return path.is_file() and path.suffix.lower().lstrip(".") in CONTENT_TYPES
+
+
+_MILLION = 1_000_000
+"""Number of units in a million."""
+
+_THOUSAND = 1_000
+"""Number of units in a thousand."""
+
+
+def compact_number(value: object) -> str:
+    """Format a count compactly, e.g. ``1234`` as ``1.2K``.
+
+    Args:
+        value: The count, typically an int from the extractor metadata.
+
+    Returns:
+        The compact representation, or the stringified value when it is not
+        a number.
+    """
+    try:
+        number = float(value)
+    except TypeError, ValueError:
+        return str(value)
+
+    if number >= _MILLION:
+        amount, suffix = number / _MILLION, "M"
+    elif number >= _THOUSAND:
+        amount, suffix = number / _THOUSAND, "K"
+    else:
+        return str(int(number))
+
+    return f"{amount:.1f}".rstrip("0").rstrip(".") + suffix
 
 
 def original_image_url(url: str) -> str | None:
@@ -532,6 +576,13 @@ def build_embed(  # ruff: ignore[too-many-arguments]
     username = str(author.get("nick") or "").strip()
 
     title = f"{name} ({username})" if username else name
+    handle = f"@{username.lstrip('@')}" if username else None
+
+    stats: tuple[tuple[str, str], ...] = ()
+    if (retweets := meta.get("retweets")) is not None:
+        stats += (("Retweets", compact_number(retweets)),)
+    if (likes := meta.get("likes")) is not None:
+        stats += (("Likes", compact_number(likes)),)
 
     description = HTMLParser(str(meta.get("content") or "")).text(
         separator=" ",
@@ -562,6 +613,9 @@ def build_embed(  # ruff: ignore[too-many-arguments]
         description=description,
         url=canonical_url,
         media=media,
+        site=handle,
+        creator=handle,
+        stats=stats,
     )
 
 
@@ -591,6 +645,20 @@ def generate_html(embed: Embed) -> str:
         meta(name="twitter:title", content=embed.title),
         meta(name="twitter:description", content=embed.description),
     ]
+
+    if embed.site:
+        tags.append(meta(name="twitter:site", content=embed.site))
+    if embed.creator:
+        tags.append(meta(name="twitter:creator", content=embed.creator))
+
+    # Discord renders the first two pairs as fields in the embed.
+    for index, (label, value) in enumerate(embed.stats[:2], 1):
+        tags.extend(
+            [
+                meta(name=f"twitter:label{index}", content=label),
+                meta(name=f"twitter:data{index}", content=value),
+            ],
+        )
 
     for image in images:
         tags.extend(

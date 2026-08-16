@@ -16,6 +16,7 @@ from e.main import app
 from e.twitter import Embed
 from e.twitter import Media
 from e.twitter import build_embed
+from e.twitter import compact_number
 from e.twitter import content_type_for
 from e.twitter import extract_data
 from e.twitter import generate_html
@@ -31,6 +32,8 @@ if TYPE_CHECKING:
 KWDICT: dict[str, Any] = {
     "author": {"name": "DiscussingFilm", "nick": "@DiscussingFilm"},
     "tweet_id": "2086143411984208230",
+    "retweets": 1234,
+    "likes": 34567,
     "content": (
         'Ryan Hurst has shared <a href="/DiscussingFilm">a photo</a> of himself partially in makeup as Kratos.'
     ),
@@ -43,6 +46,17 @@ def test_content_type_for() -> None:
     assert content_type_for(Path("2.mp4")) == "video/mp4"
     assert content_type_for("3.webp") == "image/webp"
     assert content_type_for("unknown.bin") == "application/octet-stream"
+
+
+def test_compact_number() -> None:
+    """Test compact count formatting."""
+    assert compact_number(914) == "914"
+    assert compact_number(25301) == "25.3K"
+    assert compact_number(1249683) == "1.2M"
+    assert compact_number(1000000) == "1M"
+    assert compact_number(0) == "0"
+    assert compact_number(-5) == "-5"
+    assert compact_number("n/a") == "n/a"
 
 
 def test_extract_data() -> None:
@@ -178,6 +192,9 @@ def test_build_embed(tmp_dir: Path) -> None:
     assert embed.title == "DiscussingFilm (@DiscussingFilm)"
     assert embed.description == ("Ryan Hurst has shared a photo of himself partially in makeup as Kratos.")
     assert embed.url == "https://twitter.com/DiscussingFilm/status/2086143411984208230"
+    assert embed.site == "@DiscussingFilm"
+    assert embed.creator == "@DiscussingFilm"
+    assert embed.stats == (("Retweets", "1.2K"), ("Likes", "34.6K"))
 
     assert embed.media[0].content_type == "image/jpeg"
     assert not embed.media[0].is_video
@@ -246,6 +263,29 @@ def test_generate_html_image_embed() -> None:
     assert 'property="og:image" content="https://e.lovinator.space/media/1.jpg"' in rendered
     assert 'name="twitter:card" content="summary_large_image"' in rendered
     assert "og:video" not in rendered
+
+
+def test_generate_html_author_and_stats() -> None:
+    """Test that author handles and stats render as Twitter card tags."""
+    embed = Embed(
+        title="DiscussingFilm (@DiscussingFilm)",
+        description="A video.",
+        url="https://twitter.com/DiscussingFilm/status/2086143411984208230",
+        media=(),
+        site="@DiscussingFilm",
+        creator="@DiscussingFilm",
+        stats=(("Retweets", "1.2K"), ("Likes", "34.6K"), ("Quotes", "3")),
+    )
+
+    rendered = generate_html(embed)
+
+    assert 'name="twitter:site" content="@DiscussingFilm"' in rendered
+    assert 'name="twitter:creator" content="@DiscussingFilm"' in rendered
+    assert 'name="twitter:label1" content="Retweets"' in rendered
+    assert 'name="twitter:data1" content="1.2K"' in rendered
+    assert 'name="twitter:label2" content="Likes"' in rendered
+    assert 'name="twitter:data2" content="34.6K"' in rendered
+    assert "twitter:label3" not in rendered
 
 
 def test_download_archives_metadata_and_returns_files(monkeypatch: pytest.MonkeyPatch, tmp_dir: Path) -> None:
@@ -336,6 +376,9 @@ def test_route_returns_embed_for_discord(monkeypatch: pytest.MonkeyPatch) -> Non
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert 'name="twitter:player:stream"' in response.text
+    assert 'name="twitter:site" content="@DiscussingFilm"' in response.text
+    assert 'name="twitter:label1" content="Retweets"' in response.text
+    assert 'name="twitter:data2" content="34.6K"' in response.text
     assert "/media/1.mp4" in response.text
 
 

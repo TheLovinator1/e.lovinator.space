@@ -32,6 +32,8 @@ REDDIT_META: dict[str, Any] = {
     "selftext": "Look at this good boy",
     "author": "someone",
     "id": "abc123",
+    "ups": 1234,
+    "num_comments": 56,
 }
 
 
@@ -76,6 +78,7 @@ def test_build_embed(tmp_dir: Path) -> None:
     assert embed.title == "Cute puppy"
     assert embed.description == "Look at this good boy"
     assert embed.url == "https://www.reddit.com/r/aww/comments/abc123"
+    assert embed.stats == (("Upvotes", "1.2K"), ("Comments", "56"))
     assert embed.media[0].url == "https://e.lovinator.space/media/1.jpg"
     assert embed.media[0].content_type == "image/jpeg"
 
@@ -242,6 +245,8 @@ def test_route_returns_embed_for_discord(monkeypatch: pytest.MonkeyPatch) -> Non
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert 'property="og:image"' in response.text
+    assert 'name="twitter:label1" content="Upvotes"' in response.text
+    assert 'name="twitter:data1" content="1.2K"' in response.text
     assert "/media/1.jpg" in response.text
 
 

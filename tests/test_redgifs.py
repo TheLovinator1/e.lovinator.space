@@ -33,6 +33,8 @@ REDGIFS_META: dict[str, Any] = {
     "tags": ["Asian", "Cowgirl"],
     "width": 1920,
     "height": 1080,
+    "views": 1249683,
+    "likes": 914,
     "category": "redgifs",
     "urls": {
         "poster": f"https://media.redgifs.com/{GIF_ID.capitalize()}-poster.jpg",
@@ -64,8 +66,9 @@ def test_build_embed(tmp_dir: Path) -> None:
     )
 
     assert embed.title == "wobby89 on Redgifs"
-    assert embed.description == "A very nice gif"
+    assert embed.description == "A very nice gif\n\nTags: Asian, Cowgirl"
     assert embed.url == f"https://www.redgifs.com/watch/{GIF_ID}"
+    assert embed.stats == (("Views", "1.2M"), ("Likes", "914"))
     assert embed.media[0].url == "https://e.lovinator.space/media/1.mp4"
     assert embed.media[0].content_type == "video/mp4"
     assert embed.media[0].width == 1920
@@ -85,6 +88,20 @@ def test_build_embed_falls_back_to_tags_when_description_empty() -> None:
     )
 
     assert embed.description == "Asian, Cowgirl"
+
+
+def test_build_embed_uses_description_when_no_tags() -> None:
+    """Test that the description stands alone when there are no tags."""
+    meta = {**REDGIFS_META, "tags": []}
+
+    embed = build_embed(
+        meta,
+        [],
+        base_url="https://e.lovinator.space",
+        canonical_url=f"https://www.redgifs.com/watch/{GIF_ID}",
+    )
+
+    assert embed.description == "A very nice gif"
 
 
 def test_build_embed_external_video_url() -> None:
@@ -233,6 +250,8 @@ def test_route_returns_embed_for_discord(monkeypatch: pytest.MonkeyPatch) -> Non
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
     assert 'property="og:title" content="wobby89 on Redgifs"' in response.text
+    assert 'name="twitter:label1" content="Views"' in response.text
+    assert 'name="twitter:data1" content="1.2M"' in response.text
     assert "/media/1.mp4" in response.text
     assert (
         'property="og:image" content="https://media.redgifs.com/Waterloggedmediumpurplequillback-poster.jpg"'
@@ -240,13 +259,14 @@ def test_route_returns_embed_for_discord(monkeypatch: pytest.MonkeyPatch) -> Non
     )
 
 
-def test_route_uses_direct_url_and_downloads_in_background(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_route_uses_direct_url_and_downloads_in_background(monkeypatch: pytest.MonkeyPatch, tmp_dir: Path) -> None:
     """Test that the embed serves Redgifs' direct MP4 and archives later."""
     monkeypatch.setattr(
         redgifs_module,
         "client_ip_from",
         lambda request: ip_address("127.0.0.1"),
     )
+    monkeypatch.setattr(redgifs_module, "REDGIFS_MEDIA_DIR", tmp_dir)
 
     media_items = [
         {

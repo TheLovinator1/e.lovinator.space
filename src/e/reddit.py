@@ -28,6 +28,7 @@ from e.twitter import Embed
 from e.twitter import Media
 from e.twitter import base_url_for
 from e.twitter import client_ip_from
+from e.twitter import compact_number
 from e.twitter import content_type_for
 from e.twitter import download_directory
 from e.twitter import extract_data
@@ -321,6 +322,15 @@ def build_embed(  # ruff: ignore[too-many-arguments]
     title = str(meta.get("title") or "").strip() or "Reddit"
     description = str(meta.get("selftext") or "").strip()
 
+    stats: tuple[tuple[str, str], ...] = ()
+    upvotes = meta.get("ups")
+    if upvotes is None:
+        upvotes = meta.get("score")
+    if upvotes is not None:
+        stats += (("Upvotes", compact_number(upvotes)),)
+    if (num_comments := meta.get("num_comments")) is not None:
+        stats += (("Comments", compact_number(num_comments)),)
+
     reddit_video = (meta.get("secure_media") or {}).get("reddit_video") or {}
     width = reddit_video.get("width")
     height = reddit_video.get("height")
@@ -350,6 +360,7 @@ def build_embed(  # ruff: ignore[too-many-arguments]
         url=canonical_url,
         media=media,
         poster=poster,
+        stats=stats,
     )
 
 
