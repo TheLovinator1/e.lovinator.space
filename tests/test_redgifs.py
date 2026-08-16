@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Self
+from typing import TextIO
 
 from gallery_dl import config
 from gallery_dl.extractor.message import Message
@@ -22,6 +23,8 @@ from e.settings import REDGIFS_MEDIA_DIR
 from e.twitter import Embed
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     import pytest
 
 GIF_ID = "waterloggedmediumpurplequillback"
@@ -125,7 +128,7 @@ def test_download_video_archives_metadata_and_returns_files(monkeypatch: pytest.
     monkeypatch.setattr(redgifs_module, "REDGIFS_MEDIA_DIR", tmp_dir)
 
     class FakeDataJob:
-        def __init__(self, url: str, *, file: object = None) -> None:
+        def __init__(self, url: str, *, file: TextIO | None = None) -> None:
             self.exception = None
             self.data = [
                 (Message.Directory, REDGIFS_META),
@@ -143,7 +146,12 @@ def test_download_video_archives_metadata_and_returns_files(monkeypatch: pytest.
         def __enter__(self) -> Self:
             return self
 
-        def __exit__(self, *args: object) -> bool:
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> bool:
             return False
 
         def raise_for_status(self) -> None:
@@ -183,7 +191,7 @@ def test_download_uses_gallery_dl_when_no_direct_mp4(monkeypatch: pytest.MonkeyP
         directory = str(tmp_dir)
 
     class FakeDataJob:
-        def __init__(self, url: str, *, file: object = None) -> None:
+        def __init__(self, url: str, *, file: TextIO | None = None) -> None:
             self.exception = None
             self.data = [
                 (Message.Directory, REDGIFS_META),

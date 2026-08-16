@@ -4,6 +4,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
+from typing import NoReturn
 
 import e.translate as translate_module
 from e.twitter import Embed
@@ -12,6 +13,9 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import pytest
+
+# The keyword arguments translate.py sends to chat completions.
+_CreateKwargs = str | list[dict[str, str]] | int
 
 
 def _fake_client(content: str) -> SimpleNamespace:
@@ -23,9 +27,9 @@ def _fake_client(content: str) -> SimpleNamespace:
     Returns:
         A fake client with a ``calls`` list recording each request.
     """
-    calls: list[dict[str, object]] = []
+    calls: list[dict[str, _CreateKwargs]] = []
 
-    def create(**kwargs: object) -> SimpleNamespace:
+    def create(**kwargs: _CreateKwargs) -> SimpleNamespace:
         calls.append(kwargs)
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 
@@ -76,7 +80,7 @@ def test_translate_text_handles_api_errors(monkeypatch: pytest.MonkeyPatch, tmp_
     translator = translate_module._Translator(cache_path=tmp_dir / "translations.json")
     monkeypatch.setattr(translate_module, "DEEPSEEK_API_KEY", "test-key")
 
-    def create(**kwargs: object) -> object:
+    def create(**kwargs: _CreateKwargs) -> NoReturn:
         msg = "API is down"
         raise RuntimeError(msg)
 

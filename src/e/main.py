@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 import uvicorn
 from gallery_dl import output
@@ -14,19 +15,48 @@ from e.reddit import reddit
 from e.reddit import reddit_en
 from e.redgifs import redgifs
 from e.redgifs import redgifs_en
+from e.twitter import tweet_oembed
 from e.twitter import twitter
 from e.twitter import twitter_en
+from e.twitter import users_statuses
 
 output.initialize_logging(logging.INFO)
+
+_STATIC_DIR = Path(__file__).parent / "static"
+"""Directory containing the site icons."""
+
+_icon_cache: dict[str, bytes] = {}
+
+
+def _read_icon(name: str) -> bytes:
+    """Read a static icon file, caching it in memory.
+
+    Args:
+        name: Filename inside the static directory.
+
+    Returns:
+        The file contents.
+    """
+    if name not in _icon_cache:
+        _icon_cache[name] = (_STATIC_DIR / name).read_bytes()
+    return _icon_cache[name]
 
 
 @get("/favicon.ico")
 async def favicon() -> Response:  # ruff: ignore[unused-async]
-    """Return an empty favicon response."""
+    """Return the site favicon."""
     return Response(
-        content=b"",
+        content=_read_icon("favicon.ico"),
         media_type="image/x-icon",
-        status_code=204,
+    )
+
+
+@get("/apple-touch-icon.png")
+async def apple_touch_icon() -> Response:  # ruff: ignore[unused-async]
+    """Return the site icon used in embed footers by Discord."""
+    return Response(
+        content=_read_icon("apple-touch-icon.png"),
+        media_type="image/png",
     )
 
 
@@ -38,8 +68,11 @@ app = Litestar(
         reddit_en,
         redgifs,
         redgifs_en,
+        users_statuses,
+        tweet_oembed,
         media,
         favicon,
+        apple_touch_icon,
     ],
     debug=True,
 )

@@ -6,6 +6,7 @@ from ipaddress import ip_address
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
+from typing import TextIO
 
 from gallery_dl.extractor.message import Message
 from litestar.testing import TestClient
@@ -15,10 +16,12 @@ from e.discord import DiscordIPs
 from e.main import app
 from e.twitter import Embed
 from e.twitter import Media
+from e.twitter import avatar_from_profile
 from e.twitter import build_embed
 from e.twitter import compact_number
 from e.twitter import content_type_for
 from e.twitter import extract_data
+from e.twitter import generate_activity_html
 from e.twitter import generate_html
 from e.twitter import is_media_file
 from e.twitter import list_media_files
@@ -56,7 +59,6 @@ def test_compact_number() -> None:
     assert compact_number(1000000) == "1M"
     assert compact_number(0) == "0"
     assert compact_number(-5) == "-5"
-    assert compact_number("n/a") == "n/a"
 
 
 def test_extract_data() -> None:
@@ -288,6 +290,72 @@ def test_generate_html_author_and_stats() -> None:
     assert "twitter:label3" not in rendered
 
 
+def test_avatar_from_profile() -> None:
+    """Test extracting the avatar from a Nitter profile page."""
+    page = (
+        '<img class="avatar round" src="https://pbs.twimg.com/profile_images/'
+        '1706429397467549696/hmvwfChQ_bigger.jpg" alt="" loading="lazy" />'
+    )
+
+    assert avatar_from_profile(page) == "https://pbs.twimg.com/profile_images/1706429397467549696/hmvwfChQ_400x400.jpg"
+    assert avatar_from_profile("<html><body></body></html>") is None
+
+
+def test_generate_activity_html_video_embed() -> None:
+    """Test that the Mastodon-style head links the activity documents."""
+    embed = Embed(
+        title="DiscussingFilm (@DiscussingFilm)",
+        description="A video.",
+        url="https://twitter.com/DiscussingFilm/status/2086143411984208230",
+        media=(
+            Media(
+                url="https://e.lovinator.space/media/1.mp4",
+                content_type="video/mp4",
+            ),
+        ),
+        site="@DiscussingFilm",
+        creator="@DiscussingFilm",
+    )
+
+    rendered = generate_activity_html(
+        embed,
+        activity_url="https://e.lovinator.space/users/DiscussingFilm/statuses/2086143411984208230",
+        oembed_url="https://e.lovinator.space/_oembed/DiscussingFilm/2086143411984208230",
+    )
+
+    assert 'rel="alternate" type="application/activity+json"' in rendered
+    assert 'rel="alternate" type="application/json+oembed"' in rendered
+    assert 'property="twitter:site" content="@DiscussingFilm"' in rendered
+    assert 'property="twitter:creator" content="@DiscussingFilm"' in rendered
+    assert 'property="twitter:player:stream" content="https://e.lovinator.space/media/1.mp4"' in rendered
+    assert 'property="og:video" content="https://e.lovinator.space/media/1.mp4"' in rendered
+    assert 'rel="icon" href="/favicon.ico"' in rendered
+    assert 'rel="apple-touch-icon" href="/apple-touch-icon.png"' in rendered
+    assert "og:image" not in rendered
+    assert "og:video:secure_url" not in rendered
+    assert "twitter:label" not in rendered
+
+
+def test_generate_activity_html_text_only_uses_avatar() -> None:
+    """Test that text-only posts use the author avatar as the image."""
+    embed = Embed(
+        title="DiscussingFilm (@DiscussingFilm)",
+        description="Just text.",
+        url="https://twitter.com/DiscussingFilm/status/2086143411984208230",
+        media=(),
+    )
+
+    rendered = generate_activity_html(
+        embed,
+        activity_url="https://e.lovinator.space/users/DiscussingFilm/statuses/2086143411984208230",
+        oembed_url="https://e.lovinator.space/_oembed/DiscussingFilm/2086143411984208230",
+        avatar_url="https://example.com/avatar.jpg",
+    )
+
+    assert 'property="og:image" content="https://example.com/avatar.jpg"' in rendered
+    assert 'name="twitter:card" content="summary"' in rendered
+
+
 def test_download_archives_metadata_and_returns_files(monkeypatch: pytest.MonkeyPatch, tmp_dir: Path) -> None:
     """Test that download archives metadata and returns the media files."""
 
@@ -295,7 +363,7 @@ def test_download_archives_metadata_and_returns_files(monkeypatch: pytest.Monkey
         directory = str(tmp_dir)
 
     class FakeDataJob:
-        def __init__(self, url: str, *, file: object = None) -> None:
+        def __init__(self, url: str, *, file: TextIO | None = None) -> None:
             self.exception = None
             self.data = [
                 (Message.Directory, KWDICT),
@@ -353,6 +421,11 @@ def _empty_ips() -> DiscordIPs:
     )
 
 
+async def _fake_avatar(username: str) -> str:  # ruff: ignore[unused-async]
+    """Return a fixed avatar URL for the author."""
+    return "https://example.com/avatar.jpg"
+
+
 def test_route_returns_embed_for_discord(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that Discord clients receive an Open Graph embed page."""
     monkeypatch.setattr(
@@ -369,17 +442,20 @@ def test_route_returns_embed_for_discord(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
     monkeypatch.setattr(twitter_module, "download_media", fake_download_media)
+    monkeypatch.setattr(twitter_module, "avatar_url_for", _fake_avatar)
 
     with TestClient(app=app) as client:
         response = client.get("/DiscussingFilm/status/2086143411984208230")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
-    assert 'name="twitter:player:stream"' in response.text
-    assert 'name="twitter:site" content="@DiscussingFilm"' in response.text
-    assert 'name="twitter:label1" content="Retweets"' in response.text
-    assert 'name="twitter:data2" content="34.6K"' in response.text
+    assert 'property="twitter:player:stream"' in response.text
+    assert 'property="twitter:site" content="@DiscussingFilm"' in response.text
+    assert 'rel="alternate" type="application/activity+json"' in response.text
+    assert 'rel="alternate" type="application/json+oembed"' in response.text
+    assert 'href="/favicon.ico"' in response.text
     assert "/media/1.mp4" in response.text
+    assert "twitter:label" not in response.text
 
 
 def test_route_video_uses_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -405,6 +481,7 @@ def test_route_video_uses_direct_url(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
     monkeypatch.setattr(twitter_module, "download_background", fake_download_background)
+    monkeypatch.setattr(twitter_module, "avatar_url_for", _fake_avatar)
 
     with TestClient(app=app) as client:
         response = client.get("/DiscussingFilm/status/2086143411984208230")
@@ -444,13 +521,16 @@ def test_route_image_uses_original_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
     monkeypatch.setattr(twitter_module, "download_background", fake_download_background)
     monkeypatch.setattr(twitter_module, "download_media", fake_download_media)
+    monkeypatch.setattr(twitter_module, "avatar_url_for", _fake_avatar)
 
     with TestClient(app=app) as client:
         response = client.get("/DiscussingFilm/status/2086143411984208230")
 
     assert response.status_code == 200
-    assert 'property="og:image" content="https://pbs.twimg.com/media/HPN4YF0X0AAx-ug.jpg"' in response.text
-    assert 'property="og:image" content="https://pbs.twimg.com/media/HPN4YF0X0AAx-ug2.jpg"' in response.text
+    # The Mastodon-style head suppresses og:image so Discord keeps the activity card.
+    assert "og:image" not in response.text
+    assert 'name="twitter:card" content="summary_large_image"' in response.text
+    assert 'rel="alternate" type="application/activity+json"' in response.text
     assert "testserver.local/media/" not in response.text
     assert calls["url"].endswith("/DiscussingFilm/status/2086143411984208230")
 
@@ -473,12 +553,15 @@ def test_route_image_falls_back_to_download(monkeypatch: pytest.MonkeyPatch) -> 
 
     monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
     monkeypatch.setattr(twitter_module, "download_media", fake_download_media)
+    monkeypatch.setattr(twitter_module, "avatar_url_for", _fake_avatar)
 
     with TestClient(app=app) as client:
         response = client.get("/DiscussingFilm/status/2086143411984208230")
 
     assert response.status_code == 200
-    assert 'property="og:image" content="http://testserver.local/media/1.jpg"' in response.text
+    # The Mastodon-style head suppresses og:image so Discord keeps the activity card.
+    assert "og:image" not in response.text
+    assert 'rel="alternate" type="application/activity+json"' in response.text
 
 
 def test_route_redirects_non_discord(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -525,13 +608,14 @@ def test_route_en_translates_tweet_text(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
     monkeypatch.setattr(twitter_module, "download_media", fake_download_media)
     monkeypatch.setattr(twitter_module, "translate_embed", fake_translate_embed)
+    monkeypatch.setattr(twitter_module, "avatar_url_for", _fake_avatar)
 
     with TestClient(app=app) as client:
         response = client.get("/DiscussingFilm/status/2086143411984208230/en")
 
     assert response.status_code == 200
     assert 'property="og:description" content="Ryan Hurst shared a photo."' in response.text
-    assert 'name="twitter:description" content="Ryan Hurst shared a photo."' in response.text
+    assert 'rel="alternate" type="application/json+oembed"' in response.text
 
 
 def test_route_en_redirects_non_discord(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -555,3 +639,97 @@ def test_route_en_redirects_non_discord(monkeypatch: pytest.MonkeyPatch) -> None
 
     assert response.status_code == 302
     assert response.headers["location"] == ("https://twitter.com/DiscussingFilm/status/2086143411984208230")
+
+
+def test_route_serves_activity_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the activity+json route returns a Mastodon Status document."""
+    monkeypatch.setattr(twitter_module, "avatar_url_for", _fake_avatar)
+
+    async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return dict(KWDICT), []
+
+    monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
+
+    with TestClient(app=app) as client:
+        response = client.get("/users/DiscussingFilm/statuses/2086143411984208230")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/activity+json")
+
+    payload = response.json()
+    assert payload["id"] == "2086143411984208230"
+    assert payload["url"] == "https://twitter.com/DiscussingFilm/status/2086143411984208230"
+    assert "🔁 1.2K   ❤️ 34.6K" in payload["content"]
+    assert payload["content"].endswith("makeup as Kratos.</p>")
+    assert payload["reblogs_count"] == 1234
+    assert payload["favourites_count"] == 34567
+    assert payload["account"]["acct"] == "DiscussingFilm"
+    assert payload["account"]["avatar"] == "https://example.com/avatar.jpg"
+    assert payload["account"]["url"] == "https://twitter.com/DiscussingFilm"
+
+
+def test_route_activity_document_includes_media(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the activity document carries image and video attachments."""
+    monkeypatch.setattr(twitter_module, "avatar_url_for", _fake_avatar)
+
+    media_items = [
+        {"url": "https://nitter.net/pic/orig/media%2Fa.jpg", "extension": "jpg", "num": 1},
+        {"url": "https://nitter.net/video/abc.mp4", "extension": "mp4", "num": 2},
+    ]
+
+    async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return dict(KWDICT), media_items
+
+    monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
+
+    with TestClient(app=app) as client:
+        response = client.get("/users/DiscussingFilm/statuses/2086143411984208230")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["media_attachments"] == [
+        {
+            "type": "image",
+            "url": "https://pbs.twimg.com/media/a.jpg",
+            "preview_url": "https://pbs.twimg.com/media/a.jpg",
+        },
+        {"type": "video", "url": "https://nitter.net/video/abc.mp4"},
+    ]
+
+
+def test_route_serves_oembed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that the oEmbed route returns counts in the author name."""
+
+    async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:  # ruff: ignore[unused-async]
+        return dict(KWDICT), []
+
+    monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
+
+    with TestClient(app=app) as client:
+        response = client.get("/_oembed/DiscussingFilm/2086143411984208230")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+
+    payload = response.json()
+    assert payload["type"] == "rich"
+    assert payload["author_name"] == "🔁 1.2K   ❤️ 34.6K"
+    assert payload["author_url"] == "https://twitter.com/DiscussingFilm/status/2086143411984208230"
+    assert payload["provider_name"] == "e.lovinator.space"
+
+
+def test_route_activity_document_404(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that a missing tweet returns 404 from the JSON routes."""
+
+    async def fake_fetch_meta(nitter_url: str) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:  # ruff: ignore[unused-async]
+        return None
+
+    monkeypatch.setattr(twitter_module, "fetch_meta_async", fake_fetch_meta)
+
+    with TestClient(app=app) as client:
+        activity = client.get("/users/DiscussingFilm/statuses/999")
+        oembed = client.get("/_oembed/DiscussingFilm/999")
+
+    assert activity.status_code == 404
+    assert oembed.status_code == 404
+    assert activity.json() == {"error": "Not Found"}

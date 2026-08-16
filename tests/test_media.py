@@ -105,3 +105,23 @@ def test_media_blocks_path_traversal(monkeypatch: pytest.MonkeyPatch, tmp_dir: P
         response = client.get("/media/../secret")
 
     assert response.status_code == 404
+
+
+def test_favicon_served() -> None:
+    """Test that the favicon route serves the site icon."""
+    with TestClient(app=app) as client:
+        response = client.get("/favicon.ico")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/x-icon"
+    assert response.content[:4] == b"\x00\x00\x01\x00"
+
+
+def test_apple_touch_icon_served() -> None:
+    """Test that the apple-touch-icon route serves a PNG."""
+    with TestClient(app=app) as client:
+        response = client.get("/apple-touch-icon.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content[:8] == b"\x89PNG\r\n\x1a\n"

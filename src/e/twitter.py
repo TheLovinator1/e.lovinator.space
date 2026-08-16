@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import binascii
+import html as html_module
 import json
 import re
+import time
 from dataclasses import dataclass
+from datetime import datetime
 from ipaddress import IPv4Address
 from ipaddress import IPv6Address
 from ipaddress import ip_address
@@ -14,12 +17,14 @@ from urllib.parse import quote
 from urllib.parse import unquote
 from urllib.parse import urlsplit
 
+import niquests
 from anyio import to_thread
 from gallery_dl import config
 from gallery_dl import job
 from gallery_dl.extractor.message import Message
 from htpy import head
 from htpy import html
+from htpy import link
 from htpy import meta
 from litestar import Request
 from litestar import get
@@ -30,6 +35,11 @@ from litestar.response import Response
 from loguru import logger
 from selectolax.parser import HTMLParser
 
+from e.activity import DEFAULT_AUTHOR_TEXT
+from e.activity import compact_number
+from e.activity import engagement_text
+from e.activity import oembed_payload
+from e.activity import status_payload
 from e.discord import DiscordIPs
 from e.discord import get_discord_ips
 from e.settings import ARCHIVE_PATH
@@ -176,36 +186,80 @@ def is_media_file(path: Path) -> bool:
     return path.is_file() and path.suffix.lower().lstrip(".") in CONTENT_TYPES
 
 
-_MILLION = 1_000_000
-"""Number of units in a million."""
+_META_CACHE_TTL = 10 * 60
+"""How long fetched tweet metadata is kept in memory."""
 
-_THOUSAND = 1_000
-"""Number of units in a thousand."""
+_meta_cache: dict[str, tuple[float, tuple[dict[str, Any], list[dict[str, Any]]] | None]] = {}
+"""In-memory cache of ``nitter_url -> (fetched_at, (meta, media_items))``.
+
+Discord requests the embed page, the activity document and the oEmbed
+document for every posted link; the cache stops those from each hitting Nitter.
+"""
+
+_AVATAR_CACHE_TTL = 24 * 60 * 60
+"""How long a resolved profile image URL is kept in memory."""
+
+_avatar_cache: dict[str, tuple[float, str | None]] = {}
+"""In-memory cache of ``username -> (fetched_at, avatar_url)``."""
+
+_AVATAR_RE = re.compile(r'<img class="avatar[^"]*" src="([^"]+)"')
 
 
-def compact_number(value: object) -> str:
-    """Format a count compactly, e.g. ``1234`` as ``1.2K``.
+def avatar_from_profile(html: str) -> str | None:
+    """Extract the profile image URL from a Nitter profile page.
 
     Args:
-        value: The count, typically an int from the extractor metadata.
+        html: The profile page HTML.
 
     Returns:
-        The compact representation, or the stringified value when it is not
-        a number.
+        The absolute avatar URL, or ``None`` if it cannot be found.
     """
+    match = _AVATAR_RE.search(html)
+    if match is None:
+        return None
+    url = html_module.unescape(match.group(1))
+    return url.replace("_bigger.", "_400x400.") if "_bigger." in url else url
+
+
+def _fetch_profile(username: str) -> str | None:
+    """Fetch a Nitter profile page and return the avatar URL (blocking).
+
+    Args:
+        username: The Twitter handle without the ``@``.
+
+    Returns:
+        The avatar URL, or ``None`` if the page has none.
+    """
+    response = niquests.get(
+        f"{NITTER_INSTANCE}/{username}",
+        timeout=15,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; e.lovinator.space)"},
+    )
+    response.raise_for_status()
+    return avatar_from_profile(response.text)
+
+
+async def avatar_url_for(username: str) -> str | None:
+    """Return the profile image URL for a handle, cached for a day.
+
+    Args:
+        username: The Twitter handle without the ``@``.
+
+    Returns:
+        The absolute avatar URL, or ``None`` if it cannot be resolved.
+    """
+    now = time.monotonic()
+    cached = _avatar_cache.get(username)
+    if cached is not None and now - cached[0] < _AVATAR_CACHE_TTL:
+        return cached[1]
+
+    url = None
     try:
-        number = float(value)
-    except TypeError, ValueError:
-        return str(value)
-
-    if number >= _MILLION:
-        amount, suffix = number / _MILLION, "M"
-    elif number >= _THOUSAND:
-        amount, suffix = number / _THOUSAND, "K"
-    else:
-        return str(int(number))
-
-    return f"{amount:.1f}".rstrip("0").rstrip(".") + suffix
+        url = await to_thread.run_sync(_fetch_profile, username)
+    except (niquests.RequestException, OSError) as exc:
+        logger.warning("Could not fetch avatar for @{}: {}", username, exc)
+    _avatar_cache[username] = (now, url)
+    return url
 
 
 def original_image_url(url: str) -> str | None:
@@ -541,6 +595,27 @@ async def fetch_meta_async(
     return await to_thread.run_sync(fetch_meta, nitter_url)
 
 
+async def fetch_meta_cached(
+    nitter_url: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    """Fetch tweet metadata with a short in-memory cache.
+
+    Args:
+        nitter_url: URL of the tweet on a Nitter instance.
+
+    Returns:
+        The same result as :func:`fetch_meta_async`.
+    """
+    now = time.monotonic()
+    cached = _meta_cache.get(nitter_url)
+    if cached is not None and now - cached[0] < _META_CACHE_TTL:
+        return cached[1]
+
+    result = await fetch_meta_async(nitter_url)
+    _meta_cache[nitter_url] = (now, result)
+    return result
+
+
 def build_embed(  # ruff: ignore[too-many-arguments]
     meta: dict[str, Any],
     files: list[Path],
@@ -707,9 +782,216 @@ def generate_html(embed: Embed) -> str:
             head[
                 meta(name="viewport", content="width=device-width, initial-scale=1.0"),
                 *tags,
+                link(rel="icon", href="/favicon.ico"),
+                link(rel="apple-touch-icon", href="/apple-touch-icon.png"),
             ],
         ],
     )
+
+
+def generate_activity_html(
+    embed: Embed,
+    *,
+    activity_url: str,
+    oembed_url: str,
+    avatar_url: str | None = None,
+) -> str:
+    """Render a Mastodon-style embed page for Discord.
+
+    Discord renders embeds with an author row, engagement counts and a player
+    only for pages that look like Mastodon statuses: the ``application/
+    activity+json`` and ``application/json+oembed`` alternate links make
+    Discord fetch the activity and oEmbed documents, which carry the avatar,
+    counts and media. The Open Graph tags stay minimal — notably *no*
+    ``og:image`` when the post has media — because an ``og:image`` makes
+    Discord fall back to the plain card and lose the author row.
+
+    Args:
+        embed: The embed data to render.
+        activity_url: Absolute URL of the Mastodon-style status document.
+        oembed_url: Absolute URL of the oEmbed document.
+        avatar_url: The author's avatar, used as the image for text-only posts.
+
+    Returns:
+        A complete HTML document.
+    """
+    videos = [media for media in embed.media if media.is_video]
+    images = [media for media in embed.media if not media.is_video]
+
+    tags = [
+        meta(name="theme-color", content="#1d9bf0"),
+        meta(property="og:site_name", content="e.lovinator.space"),
+        meta(property="og:title", content=embed.title),
+        meta(property="og:url", content=embed.url),
+        meta(property="og:description", content=embed.description),
+        meta(property="og:type", content="video.other" if videos else "article"),
+        meta(property="twitter:title", content=embed.title),
+    ]
+
+    if embed.site:
+        tags.append(meta(property="twitter:site", content=embed.site))
+    if embed.creator:
+        tags.append(meta(property="twitter:creator", content=embed.creator))
+
+    if videos:
+        video = videos[0]
+        width = video.width or 1280
+        height = video.height or 720
+        tags.extend(
+            [
+                meta(property="og:video", content=video.url),
+                meta(property="og:video:type", content=video.content_type),
+                meta(property="og:video:width", content=str(width)),
+                meta(property="og:video:height", content=str(height)),
+                meta(property="twitter:player", content=video.url),
+                meta(property="twitter:player:stream", content=video.url),
+                meta(
+                    property="twitter:player:stream:content_type",
+                    content=video.content_type,
+                ),
+                meta(property="twitter:player:width", content=str(width)),
+                meta(property="twitter:player:height", content=str(height)),
+            ],
+        )
+    elif images:
+        # Image posts: no og:image, so Discord keeps the activity card.
+        tags.append(meta(name="twitter:card", content="summary_large_image"))
+    elif avatar_url:
+        # Text-only posts: the avatar acts as the embed image.
+        tags.extend(
+            [
+                meta(property="og:image", content=avatar_url),
+                meta(name="twitter:card", content="summary"),
+            ],
+        )
+
+    return str(
+        html[
+            head[
+                meta(name="viewport", content="width=device-width, initial-scale=1.0"),
+                *tags,
+                link(rel="alternate", type="application/activity+json", href=activity_url),
+                link(rel="alternate", type="application/json+oembed", href=oembed_url),
+                link(rel="icon", href="/favicon.ico"),
+                link(rel="apple-touch-icon", href="/apple-touch-icon.png"),
+            ],
+        ],
+    )
+
+
+def _media_attachments(media_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build Mastodon ``MediaAttachment`` documents from the media items.
+
+    Args:
+        media_items: The media items extracted from gallery-dl.
+
+    Returns:
+        The attachment documents; video items keep their direct MP4 URL and
+        image items are mapped back to Twitter's CDN when possible.
+    """
+    attachments: list[dict[str, Any]] = []
+    for item in media_items:
+        extension = (item.get("extension") or "").lower().lstrip(".")
+        url = item.get("url") or ""
+        if url.startswith("ytdl:"):
+            continue
+        if CONTENT_TYPES.get(extension, "").startswith("image/"):
+            original = original_image_url(url) or url
+            attachments.append({"type": "image", "url": original, "preview_url": original})
+        elif extension == "mp4":
+            attachments.append({"type": "video", "url": url})
+    return attachments
+
+
+def _account_document(meta: dict[str, Any], username: str, avatar: str | None) -> dict[str, Any]:
+    """Build a Mastodon ``Account`` document for a tweet's author.
+
+    Args:
+        meta: The tweet metadata from gallery-dl.
+        username: The canonical handle without the ``@``.
+        avatar: The resolved profile image URL, if any.
+
+    Returns:
+        The Account document.
+    """
+    author = meta.get("author") or meta.get("user") or {}
+    name = str(author.get("name") or "").strip() or "Twitter"
+    return {
+        "id": username,
+        "username": username,
+        "acct": username,
+        "display_name": name,
+        "locked": False,
+        "bot": False,
+        "discoverable": True,
+        "group": False,
+        "created_at": "1970-01-01T00:00:00.000Z",
+        "note": "",
+        "url": f"https://twitter.com/{username}",
+        "avatar": avatar or "",
+        "avatar_static": avatar or "",
+        "header": "",
+        "header_static": "",
+        "followers_count": 0,
+        "following_count": 0,
+        "statuses_count": 0,
+        "last_status_at": None,
+    }
+
+
+def _created_at(meta: dict[str, Any]) -> str:
+    """Return the tweet's creation time as an ISO-8601 string.
+
+    Args:
+        meta: The tweet metadata from gallery-dl.
+
+    Returns:
+        The ISO-8601 timestamp, or an empty string when unknown.
+    """
+    created_at = meta.get("date")
+    if isinstance(created_at, datetime):
+        if created_at.tzinfo is None:
+            return created_at.isoformat() + "Z"
+        return created_at.isoformat()
+    return str(created_at or "")
+
+
+def _status_content(meta: dict[str, Any]) -> str:
+    """Build the Mastodon ``content`` HTML for a tweet.
+
+    Engagement counts are prepended in a bold paragraph, which Discord renders
+    with its own emoji artwork.
+
+    Args:
+        meta: The tweet metadata from gallery-dl.
+
+    Returns:
+        The content HTML.
+    """
+    text = str(meta.get("content") or "")
+    counts = engagement_text(
+        comments=meta.get("comments"),
+        retweets=meta.get("retweets"),
+        likes=meta.get("likes"),
+    )
+    if counts:
+        return f"<p><b>{counts}</b></p><p>{text}</p>"
+    return f"<p>{text}</p>"
+
+
+def _tweet_handle(meta: dict[str, Any], fallback: str) -> str:
+    """Return the canonical handle for a tweet's author.
+
+    Args:
+        meta: The tweet metadata from gallery-dl.
+        fallback: Handle from the request URL, used when metadata is missing.
+
+    Returns:
+        The handle without the ``@``.
+    """
+    author = meta.get("author") or meta.get("user") or {}
+    nick = str(author.get("nick") or "").strip().lstrip("@")
+    return nick or fallback
 
 
 def client_ip_from(request: Request) -> IPv4Address | IPv6Address | None:
@@ -820,7 +1102,7 @@ async def twitter_en(
     return await _twitter(request, username, tweet_id, translate=True)
 
 
-async def _twitter(
+async def _twitter(  # ruff: ignore[too-many-locals]
     request: Request,
     username: str,
     tweet_id: str,
@@ -860,7 +1142,7 @@ async def _twitter(
     nitter_url = f"{NITTER_INSTANCE}/{username}/status/{tweet_id}"
     logger.info("Fetching tweet from Nitter: {}", nitter_url)
 
-    result = await fetch_meta_async(nitter_url)
+    result = await fetch_meta_cached(nitter_url)
 
     if result is None:
         logger.warning("No data returned for {}", nitter_url)
@@ -871,16 +1153,25 @@ async def _twitter(
             media=(),
         )
         background = None
+        handle = username
+        avatar = None
+        activity_url = None
+        oembed_url = None
     else:
         meta, media_items = result
         background = None
+        handle = _tweet_handle(meta, username)
+        base_url = base_url_for(request)
+        avatar = await avatar_url_for(handle)
+        activity_url = f"{base_url}/users/{quote(handle)}/statuses/{tweet_id}"
+        oembed_url = f"{base_url}/_oembed/{quote(handle)}/{tweet_id}"
 
         if video_url := _direct_video_url(media_items):
             width, height = _video_dimensions(video_url)
             embed = build_embed(
                 meta,
                 [],
-                base_url=base_url_for(request),
+                base_url=base_url,
                 canonical_url=canonical_url,
                 video_url=video_url,
                 width=width,
@@ -893,7 +1184,7 @@ async def _twitter(
             embed = build_embed(
                 meta,
                 [],
-                base_url=base_url_for(request),
+                base_url=base_url,
                 canonical_url=canonical_url,
                 image_urls=tuple(image_urls),
             )
@@ -904,15 +1195,124 @@ async def _twitter(
             embed = build_embed(
                 meta,
                 files,
-                base_url=base_url_for(request),
+                base_url=base_url,
                 canonical_url=canonical_url,
             )
 
     if translate:
         embed = await translate_embed(embed, ("description",))
 
+    if activity_url is not None and oembed_url is not None:
+        content = generate_activity_html(
+            embed,
+            activity_url=activity_url,
+            oembed_url=oembed_url,
+            avatar_url=avatar,
+        )
+    else:
+        content = generate_html(embed)
+
     return Response(
-        content=generate_html(embed),
+        content=content,
         media_type="text/html",
         background=background,
+    )
+
+
+@get("/users/{username:str}/statuses/{tweet_id:str}")
+async def users_statuses(
+    request: Request,
+    username: Annotated[str, PathParameter()],
+    tweet_id: Annotated[str, PathParameter()],
+) -> Response:
+    """Serve a Mastodon-style ``Status`` document for a tweet.
+
+    Discord follows the ``application/activity+json`` alternate link on the
+    embed page to this endpoint and reads the author row, engagement counts
+    and media from the returned document.
+
+    Args:
+        request: The incoming request.
+        username: The Twitter/X handle.
+        tweet_id: The status ID of the tweet.
+
+    Returns:
+        The Status document as JSON.
+    """
+    nitter_url = f"{NITTER_INSTANCE}/{username}/status/{tweet_id}"
+    result = await fetch_meta_cached(nitter_url)
+    if result is None:
+        return Response(
+            content=json.dumps({"error": "Not Found"}),
+            media_type="application/json",
+            status_code=404,
+        )
+
+    meta, media_items = result
+    handle = _tweet_handle(meta, username)
+    avatar = await avatar_url_for(handle)
+
+    payload = status_payload(
+        status_id=tweet_id,
+        url=f"{ORIGINAL_URL}/{handle}/status/{tweet_id}",
+        created_at=_created_at(meta),
+        content=_status_content(meta),
+        account=_account_document(meta, handle, avatar),
+        media=_media_attachments(media_items),
+        replies_count=meta.get("comments"),
+        reblogs_count=meta.get("retweets"),
+        favourites_count=meta.get("likes"),
+    )
+
+    return Response(
+        content=json.dumps(payload),
+        media_type="application/activity+json",
+    )
+
+
+@get("/_oembed/{username:str}/{tweet_id:str}")
+async def tweet_oembed(
+    request: Request,
+    username: Annotated[str, PathParameter()],
+    tweet_id: Annotated[str, PathParameter()],
+) -> Response:
+    """Serve an oEmbed document for a tweet.
+
+    Discord reads ``author_name`` from this document for the small line above
+    the embed title.
+
+    Args:
+        request: The incoming request.
+        username: The Twitter/X handle.
+        tweet_id: The status ID of the tweet.
+
+    Returns:
+        The oEmbed document as JSON.
+    """
+    nitter_url = f"{NITTER_INSTANCE}/{username}/status/{tweet_id}"
+    result = await fetch_meta_cached(nitter_url)
+    if result is None:
+        return Response(
+            content=json.dumps({"error": "Not Found"}),
+            media_type="application/json",
+            status_code=404,
+        )
+
+    meta, _ = result
+    handle = _tweet_handle(meta, username)
+
+    counts = engagement_text(
+        comments=meta.get("comments"),
+        retweets=meta.get("retweets"),
+        likes=meta.get("likes"),
+    )
+    payload = oembed_payload(
+        author_name=counts or DEFAULT_AUTHOR_TEXT,
+        author_url=f"{ORIGINAL_URL}/{handle}/status/{tweet_id}",
+        provider_url=base_url_for(request),
+    )
+
+    return Response(
+        content=json.dumps(payload),
+        media_type="application/json",
     )

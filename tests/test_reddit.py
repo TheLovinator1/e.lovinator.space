@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from typing import Any
 from typing import Self
+from typing import TextIO
 
 from gallery_dl import config
 from gallery_dl.extractor.message import Message
@@ -24,6 +25,8 @@ from e.settings import REDDIT_USER_AGENT
 from e.twitter import Embed
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     import pytest
 
 REDDIT_META: dict[str, Any] = {
@@ -119,7 +122,7 @@ def test_download_archives_metadata_and_returns_files(monkeypatch: pytest.Monkey
         directory = str(tmp_dir)
 
     class FakeDataJob:
-        def __init__(self, url: str, *, file: object = None) -> None:
+        def __init__(self, url: str, *, file: TextIO | None = None) -> None:
             self.exception = None
             self.data = [
                 (Message.Directory, REDDIT_META),
@@ -172,7 +175,7 @@ def test_download_video_uses_fallback_url(monkeypatch: pytest.MonkeyPatch, tmp_d
     }
 
     class FakeDataJob:
-        def __init__(self, url: str, *, file: object = None) -> None:
+        def __init__(self, url: str, *, file: TextIO | None = None) -> None:
             self.exception = None
             self.data = [
                 (Message.Directory, meta),
@@ -186,7 +189,12 @@ def test_download_video_uses_fallback_url(monkeypatch: pytest.MonkeyPatch, tmp_d
         def __enter__(self) -> Self:
             return self
 
-        def __exit__(self, *args: object) -> bool:
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_val: BaseException | None,
+            exc_tb: TracebackType | None,
+        ) -> bool:
             return False
 
         def raise_for_status(self) -> None:

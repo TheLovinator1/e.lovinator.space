@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from e import twitter as twitter_module
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
@@ -31,3 +33,15 @@ def tmp_dir() -> Iterator[Path]:
         yield path
     finally:
         shutil.rmtree(path, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def clear_caches() -> None:
+    """Clear module-level TTL caches before each test.
+
+    The twitter module caches fetched metadata and resolved avatars in memory;
+    without clearing them, tests that reuse the same URLs would read results
+    from earlier tests' mocks.
+    """
+    twitter_module._meta_cache.clear()
+    twitter_module._avatar_cache.clear()
