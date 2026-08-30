@@ -9,7 +9,7 @@ dependencies = [
     "anyio>=4.14.2",
     "gallery-dl[video]",
     "htpy>=26.5.1",
-    "litestar>=2.24.0",
+    "litestar[standard]>=2.24.0",
     "loguru>=0.7.3",
     "niquests>=3.21.0",
     "openai>=3.1.0",
@@ -23,6 +23,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "djlint>=1.44.2",
     "pytest>=9.1.1",
 ]
 
@@ -109,3 +110,6 @@ gallery-dl = { url = "https://codeberg.org/mikf/gallery-dl/archive/master.tar.gz
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-p no:cacheprovider"
+
+[tool.django]
+profile="jinja"

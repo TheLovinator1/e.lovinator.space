@@ -8,17 +8,13 @@ import uvicorn
 from gallery_dl import output
 from litestar import Litestar
 from litestar import get
+from litestar.contrib.jinja import JinjaTemplateEngine
 from litestar.response import Response
+from litestar.template import TemplateConfig
 
-from e.media import media
-from e.reddit import reddit
-from e.reddit import reddit_en
-from e.redgifs import redgifs
-from e.redgifs import redgifs_en
 from e.twitter import tweet_oembed
 from e.twitter import tweet_status_api
 from e.twitter import twitter
-from e.twitter import twitter_en
 from e.twitter import users_statuses
 
 output.initialize_logging(logging.INFO)
@@ -63,20 +59,18 @@ async def apple_touch_icon() -> Response:  # ruff: ignore[unused-async]
 
 app = Litestar(
     route_handlers=[
-        twitter,
-        twitter_en,
-        reddit,
-        reddit_en,
-        redgifs,
-        redgifs_en,
-        users_statuses,
-        tweet_status_api,
-        tweet_oembed,
-        media,
-        favicon,
         apple_touch_icon,
+        favicon,
+        tweet_oembed,
+        tweet_status_api,
+        twitter,
+        users_statuses,
     ],
     debug=True,
+    template_config=TemplateConfig(
+        directory=Path(__file__).parent / "templates",
+        engine=JinjaTemplateEngine,
+    ),
 )
 
 

@@ -2,6 +2,8 @@
     "cSpell.words": [
         "appauthor",
         "appname",
+        "dotenv",
+        "fxtwitter",
         "htpy",
         "Lovinator",
         "niquests",
@@ -12,5 +14,7 @@
         "wreq"
     ],
     "python.analysis.typeEvaluation.strictSetInference": true,
-    "python.analysis.typeCheckingMode": "standard"
+    "python.analysis.typeCheckingMode": "standard",
+    "editor.aiStats.enabled": true,
+    "python.analysis.aiHoverSummaries": true
 }

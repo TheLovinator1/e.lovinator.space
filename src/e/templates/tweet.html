@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#1d9bf0">
+        <meta property="og:type" content="{{ og_type }}">
+        <meta property="og:site_name" content="e.lovinator.space">
+        <meta property="og:title" content="{{ title }}">
+        <meta property="og:description" content="{{ description }}">
+        <meta property="og:url" content="{{ url }}">
+        <meta name="description" content="{{ description }}">
+        <meta name="twitter:title" content="{{ title }}">
+        <meta name="twitter:description" content="{{ description }}">
+        {% if site %}
+            <meta name="twitter:site" content="{{ site }}">
+        {% endif %}
+        {% if creator %}
+            <meta name="twitter:creator" content="{{ creator }}">
+        {% endif %}
+        {% for label, value in stats.items() %}
+            <meta name="twitter:label{{ loop.index }}" content="{{ label }}">
+            <meta name="twitter:data{{ loop.index }}" content="{{ value }}">
+        {% endfor %}
+        {% if video %}
+            <meta name="twitter:card" content="player">
+            <meta property="og:video" content="{{ video.url }}">
+            <meta property="og:video:url" content="{{ video.url }}">
+            <meta property="og:video:secure_url" content="{{ video.url }}">
+            <meta property="og:video:type" content="{{ video.content_type }}">
+            <meta property="og:video:width" content="{{ video.width }}">
+            <meta property="og:video:height" content="{{ video.height }}">
+            <meta name="twitter:player:stream" content="{{ video.url }}">
+            <meta name="twitter:player:stream:content_type"
+                  content="{{ video.content_type }}">
+            <meta name="twitter:player:width" content="{{ video.width }}">
+            <meta name="twitter:player:height" content="{{ video.height }}">
+            {% if poster %}
+                <meta property="og:image" content="{{ poster }}">
+                <meta property="og:image:secure_url" content="{{ poster }}">
+                <meta name="twitter:image" content="{{ poster }}">
+            {% endif %}
+        {% else %}
+            <meta name="twitter:card" content="summary_large_image">
+            {% if images %}
+                <meta name="twitter:image" content="{{ images[0].url }}">
+                {% for image in images %}
+                    <meta property="og:image" content="{{ image.url }}">
+                    <meta property="og:image:secure_url" content="{{ image.url }}">
+                    <meta property="og:image:width" content="{{ image.width }}">
+                    <meta property="og:image:height" content="{{ image.height }}">
+                {% endfor %}
+            {% endif %}
+        {% endif %}
+        <link rel="icon" href="/favicon.ico">
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+        <link rel="alternate"
+              type="application/activity+json"
+              href="{{ activity_url }}">
+        <link rel="alternate"
+              type="application/json+oembed"
+              href="{{ oembed_url }}">
+        <title>{{ title }}</title>
+    </head>
+    <body>
+        <dl>
+            <dt>Tweet by {{ username }}</dt>
+            <dd>
+                {{ description }}
+            </dd>
+            <dt>Link</dt>
+            <dd>
+                <a href="{{ tweet_url }}">{{ tweet_url }}</a>
+            </dd>
+        </dl>
+        {% for image in images %}
+            <img src="{{ image.url }}"
+                 alt="Tweet image {{ loop.index }} of {{ images|length }}"
+                 width="{{ image.width }}"
+                 height="{{ image.height }}">
+        {% endfor %}
+        {% if video %}
+            <video controls
+                   poster="{{ poster }}"
+                   width="{{ video.width }}"
+                   height="{{ video.height }}">
+                <source src="{{ video.url }}" type="{{ video.content_type }}">
+                Your browser does not support the video tag.
+            </video>
+        {% endif %}
+    </body>
+</html>

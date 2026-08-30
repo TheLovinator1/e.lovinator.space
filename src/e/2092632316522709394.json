@@ -1,0 +1,205 @@
+{
+    "status": {
+        "type": "status",
+        "url": "https://x.com/Liitaro3D/status/2092632316522709394",
+        "id": "2092632316522709394",
+        "text": "🐀",
+        "raw_text": {
+            "text": "🐀 https://t.co/RfAcGZ2bPR",
+            "display_text_range": [
+                0,
+                1
+            ],
+            "facets": [
+                {
+                    "type": "media",
+                    "indices": [
+                        2,
+                        25
+                    ],
+                    "id": "2092632301859430400",
+                    "display": "pic.x.com/RfAcGZ2bPR",
+                    "original": "https://t.co/RfAcGZ2bPR",
+                    "replacement": "https://x.com/Liitaro3D/status/2092632316522709394/video/1"
+                }
+            ]
+        },
+        "author": {
+            "screen_name": "Liitaro3D",
+            "url": "https://x.com/Liitaro3D",
+            "id": "1427822823461081089",
+            "followers": 3031,
+            "following": 2788,
+            "likes": 114756,
+            "media_count": 8915,
+            "statuses": 49046,
+            "name": "Liitaro 🌻💿",
+            "description": "i'm Liitaro ᗜˬᗜ and i like to draw!\nLet's do our best today \n🎨#liitarts \ndai-shin-kami-oshi of hell: 💚🧃",
+            "raw_description": {
+                "text": "i'm Liitaro ᗜˬᗜ and i like to draw!\nLet's do our best today \n🎨#liitarts \ndai-shin-kami-oshi of hell: 💚🧃",
+                "facets": []
+            },
+            "location": "🌻💿",
+            "banner_url": "https://pbs.twimg.com/profile_banners/1427822823461081089/1784124206",
+            "avatar_url": "https://pbs.twimg.com/profile_images/2081482616474054656/5STggaNv_200x200.jpg",
+            "joined": "Wed Aug 18 02:41:16 +0000 2021",
+            "protected": false,
+            "website": {
+                "url": "https://www.pixiv.net/users/79968834",
+                "display_url": "pixiv.net/users/79968834"
+            },
+            "verification": {
+                "verified": false,
+                "verified_at": null,
+                "type": null
+            },
+            "type": "profile",
+            "about_account": {
+                "based_in": "United States",
+                "location_accurate": true,
+                "created_country_accurate": true,
+                "source": "United States App Store",
+                "username_changes": {
+                    "count": 4,
+                    "last_changed_at": "2026-01-04T23:02:05.547Z"
+                }
+            }
+        },
+        "replies": 38,
+        "reposts": 337,
+        "likes": 4615,
+        "bookmarks": 652,
+        "quotes": 6,
+        "embed_card": "player",
+        "created_at": "Wed Aug 26 15:16:38 +0000 2026",
+        "created_timestamp": 1787757398,
+        "possibly_sensitive": false,
+        "views": 85391,
+        "is_note_tweet": false,
+        "community_note": null,
+        "lang": null,
+        "replying_to": null,
+        "media": {
+            "all": [
+                {
+                    "id": "2092632301859430400",
+                    "url": "https://video.twimg.com/amplify_video/2092632301859430400/vid/avc1/1280x720/g3wG9SJUB6PNblSC.mp4?tag=29",
+                    "thumbnail_url": "https://pbs.twimg.com/amplify_video_thumb/2092632301859430400/img/hKL4VHeHDyqe5OJB.jpg",
+                    "duration": 5.317,
+                    "width": 1280,
+                    "height": 720,
+                    "format": "video/mp4",
+                    "type": "video",
+                    "formats": [
+                        {
+                            "url": "https://video.twimg.com/amplify_video/2092632301859430400/pl/tDQTJe815232nTwY.m3u8?tag=29",
+                            "container": "m3u8"
+                        },
+                        {
+                            "url": "https://video.twimg.com/amplify_video/2092632301859430400/vid/avc1/480x270/13vlbAhI_S_-Bg3I.mp4?tag=29",
+                            "bitrate": 256000,
+                            "container": "mp4",
+                            "codec": "h264"
+                        },
+                        {
+                            "url": "https://video.twimg.com/amplify_video/2092632301859430400/vid/avc1/640x360/R-XCfhqifHwUbzGq.mp4?tag=29",
+                            "bitrate": 832000,
+                            "container": "mp4",
+                            "codec": "h264"
+                        },
+                        {
+                            "url": "https://video.twimg.com/amplify_video/2092632301859430400/vid/avc1/1280x720/g3wG9SJUB6PNblSC.mp4?tag=29",
+                            "bitrate": 2176000,
+                            "container": "mp4",
+                            "codec": "h264"
+                        }
+                    ],
+                    "publisher": null
+                }
+            ],
+            "videos": [
+                {
+                    "id": "2092632301859430400",
+                    "url": "https://video.twimg.com/amplify_video/2092632301859430400/vid/avc1/1280x720/g3wG9SJUB6PNblSC.mp4?tag=29",
+                    "thumbnail_url": "https://pbs.twimg.com/amplify_video_thumb/2092632301859430400/img/hKL4VHeHDyqe5OJB.jpg",
+                    "duration": 5.317,
+                    "width": 1280,
+                    "height": 720,
+                    "format": "video/mp4",
+                    "type": "video",
+                    "formats": [
+                        {
+                            "url": "https://video.twimg.com/amplify_video/2092632301859430400/pl/tDQTJe815232nTwY.m3u8?tag=29",
+                            "container": "m3u8"
+                        },
+                        {
+                            "url": "https://video.twimg.com/amplify_video/2092632301859430400/vid/avc1/480x270/13vlbAhI_S_-Bg3I.mp4?tag=29",
+                            "bitrate": 256000,
+                            "container": "mp4",
+                            "codec": "h264"
+                        },
+                        {
+                            "url": "https://video.twimg.com/amplify_video/2092632301859430400/vid/avc1/640x360/R-XCfhqifHwUbzGq.mp4?tag=29",
+                            "bitrate": 832000,
+                            "container": "mp4",
+                            "codec": "h264"
+                        },
+                        {
+                            "url": "https://video.twimg.com/amplify_video/2092632301859430400/vid/avc1/1280x720/g3wG9SJUB6PNblSC.mp4?tag=29",
+                            "bitrate": 2176000,
+                            "container": "mp4",
+                            "codec": "h264"
+                        }
+                    ],
+                    "publisher": null
+                }
+            ]
+        },
+        "source": "Twitter for iPhone",
+        "provider": "twitter",
+        "reposted_by": null
+    },
+    "thread": null,
+    "author": {
+        "screen_name": "Liitaro3D",
+        "url": "https://x.com/Liitaro3D",
+        "id": "1427822823461081089",
+        "followers": 3031,
+        "following": 2788,
+        "likes": 114756,
+        "media_count": 8915,
+        "statuses": 49046,
+        "name": "Liitaro 🌻💿",
+        "description": "i'm Liitaro ᗜˬᗜ and i like to draw!\nLet's do our best today \n🎨#liitarts \ndai-shin-kami-oshi of hell: 💚🧃",
+        "raw_description": {
+            "text": "i'm Liitaro ᗜˬᗜ and i like to draw!\nLet's do our best today \n🎨#liitarts \ndai-shin-kami-oshi of hell: 💚🧃",
+            "facets": []
+        },
+        "location": "🌻💿",
+        "banner_url": "https://pbs.twimg.com/profile_banners/1427822823461081089/1784124206",
+        "avatar_url": "https://pbs.twimg.com/profile_images/2081482616474054656/5STggaNv_200x200.jpg",
+        "joined": "Wed Aug 18 02:41:16 +0000 2021",
+        "protected": false,
+        "website": {
+            "url": "https://www.pixiv.net/users/79968834",
+            "display_url": "pixiv.net/users/79968834"
+        },
+        "verification": {
+            "verified": false,
+            "verified_at": null,
+            "type": null
+        },
+        "type": "profile",
+        "about_account": {
+            "based_in": "United States",
+            "location_accurate": true,
+            "created_country_accurate": true,
+            "source": "United States App Store",
+            "username_changes": {
+                "count": 4,
+                "last_changed_at": "2026-01-04T23:02:05.547Z"
+            }
+        }
+    },
+    "code": 200
+}
