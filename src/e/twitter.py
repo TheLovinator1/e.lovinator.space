@@ -158,12 +158,12 @@ async def twitter(
             "width": int(item.get("width") or 1280),
             "height": int(item.get("height") or 720),
         }
-        for item in (media.get("photo") or [])
+        for item in (media.get("photos") or [])
         if item.get("url")
     ]
 
     video: Video | None = None
-    if videos := media.get("video"):
+    if videos := media.get("videos"):
         item: dict[str, Any] = videos[0]
 
         if item.get("url"):
