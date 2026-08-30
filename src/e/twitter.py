@@ -150,6 +150,15 @@ async def twitter(
     title: str = text[:200]
     description: str = text[:1000]
 
+    replies: int = status.get("replies", 0)
+    likes: int = status.get("likes", 0)
+    bookmarks: int = status.get("bookmarks", 0)
+    quotes: int = status.get("quotes", 0)
+
+    emoji_poop: str = (
+        f"{description}<br>\ufe00\ufe00<br><br><b>💬 {replies}&ensp;🔁 {quotes}&ensp;❤️ {likes}&ensp;🔖 {bookmarks}</b>"
+    )
+
     photos: list[Photo] = [
         {
             "type": "photo",
@@ -204,7 +213,7 @@ async def twitter(
             "username": username,
             "tweet_id": tweet_id,
             "title": title,
-            "description": description,
+            "description": emoji_poop,
             "url": tweet_url,
             "site": f"@{username}",
             "creator": f"@{username}",

@@ -79,14 +79,5 @@
                  width="{{ image.width }}"
                  height="{{ image.height }}">
         {% endfor %}
-        {% if video %}
-            <video controls
-                   poster="{{ poster }}"
-                   width="{{ video.width }}"
-                   height="{{ video.height }}">
-                <source src="{{ video.url }}" type="{{ video.content_type }}">
-                Your browser does not support the video tag.
-            </video>
-        {% endif %}
     </body>
 </html>
