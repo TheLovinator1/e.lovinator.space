@@ -160,7 +160,7 @@ async def twitter(
     )
 
     if not title:
-        title = f"💬 {replies}&ensp;🔁 {quotes}&ensp;❤️ {likes}&ensp;🔖 {bookmarks}</b>"
+        title = f"💬 {replies}&ensp;🔁 {quotes}&ensp;❤️ {likes}&ensp;🔖 {bookmarks}"
 
     photos: list[Photo] = [
         {
