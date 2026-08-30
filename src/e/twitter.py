@@ -159,6 +159,9 @@ async def twitter(
         f"{description}<br>\ufe00\ufe00<br><br><b>💬 {replies}&ensp;🔁 {quotes}&ensp;❤️ {likes}&ensp;🔖 {bookmarks}</b>"
     )
 
+    if not title:
+        title = f"💬 {replies}&ensp;🔁 {quotes}&ensp;❤️ {likes}&ensp;🔖 {bookmarks}</b>"
+
     photos: list[Photo] = [
         {
             "type": "photo",
