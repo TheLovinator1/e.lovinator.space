@@ -288,7 +288,7 @@ async def tweet_status_api(  # ruff: ignore[unused-async]
 
     url: str = f"https://twitter.com/{username}/status/{tweet_id}"
 
-    status: dict[str, Any] = {
+    payload: dict[str, Any] = {
         "id": tweet_id,
         "url": url,
         "uri": url,
@@ -316,7 +316,7 @@ async def tweet_status_api(  # ruff: ignore[unused-async]
         for photo in photos:
             url = photo.get("url", "")
 
-            status["media_attachments"].append({
+            payload["media_attachments"].append({
                 "id": photo.get("id", ""),
                 "type": "image",
                 "url": url,
@@ -359,7 +359,7 @@ async def tweet_status_api(  # ruff: ignore[unused-async]
         for video in videos:
             url = video.get("url", "")
 
-            status["media_attachments"].append({
+            payload["media_attachments"].append({
                 "id": video.get("id", ""),
                 "type": "video",
                 "url": url,
@@ -380,7 +380,7 @@ async def tweet_status_api(  # ruff: ignore[unused-async]
             })
 
     return Response(
-        content=json.dumps(status),
+        content=json.dumps(payload),
         media_type="application/json",
     )
 
@@ -413,7 +413,7 @@ async def users_statuses(  # ruff: ignore[unused-async]
     screen_name: str = author.get("screen_name", "screen_name")
     avatar: str = author.get("avatar_url", "https://lovinator.space/KaoFace.png")
 
-    created_timestamp: int = json_data.get("created_timestamp", 0)
+    created_timestamp: int = status.get("created_timestamp", 0)
     created_at: str = datetime.fromtimestamp(created_timestamp, UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     text: str = status.get("text", "")
@@ -424,7 +424,7 @@ async def users_statuses(  # ruff: ignore[unused-async]
 
     url: str = f"https://twitter.com/{username}/status/{tweet_id}"
 
-    status: dict[str, Any] = {
+    payload: dict[str, Any] = {
         "id": tweet_id,
         "url": url,
         "uri": url,
@@ -451,7 +451,7 @@ async def users_statuses(  # ruff: ignore[unused-async]
         for photo in photos:
             url = photo.get("url", "")
 
-            status["media_attachments"].append({
+            payload["media_attachments"].append({
                 "id": photo.get("id", ""),
                 "type": "image",
                 "url": url,
@@ -459,7 +459,7 @@ async def users_statuses(  # ruff: ignore[unused-async]
                 "remote_url": None,
                 "preview_remote_url": None,
                 "text_url": None,
-                "description": "Alt text for accessibility",
+                "description": f"Photo by {username} on Twitter",
                 "meta": {
                     "original": {
                         "width": photo.get("width", 0),
@@ -494,7 +494,7 @@ async def users_statuses(  # ruff: ignore[unused-async]
         for video in videos:
             url = video.get("url", "")
 
-            status["media_attachments"].append({
+            payload["media_attachments"].append({
                 "id": video.get("id", ""),
                 "type": "video",
                 "url": url,
@@ -515,7 +515,7 @@ async def users_statuses(  # ruff: ignore[unused-async]
             })
 
     return Response(
-        content=json.dumps(status),
+        content=json.dumps(payload),
         media_type="application/json",
     )
 
