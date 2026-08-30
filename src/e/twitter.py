@@ -277,7 +277,7 @@ async def tweet_status_api(  # ruff: ignore[unused-async]
     username: str = author.get("name", "screen_name")
     avatar: str = author.get("avatar_url", "https://lovinator.space/KaoFace.png")
 
-    created_timestamp: int = json_data.get("created_timestamp", 0)
+    created_timestamp: int = status.get("created_timestamp", 0)
     created_at: str = datetime.fromtimestamp(created_timestamp, UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     text: str = status.get("text", "")
@@ -294,6 +294,7 @@ async def tweet_status_api(  # ruff: ignore[unused-async]
         "uri": url,
         "created_at": created_at,
         "content": content,
+        "visibility": "public",
         "account": {
             "id": author_id,
             "display_name": screen_name,
