@@ -273,8 +273,10 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
     author: dict[str, Any] = json_data.get("author", {})
 
     author_id: str = author.get("id", "")
-    screen_name: str = author.get("screen_name", "screen_name")
     username: str = author.get("name", "screen_name")
+    author_name: str = author.get("name", "name")
+    screen_name: str = author.get("screen_name", username)
+
     avatar: str = author.get("avatar_url", "https://lovinator.space/KaoFace.png")
 
     created_timestamp: int = status.get("created_timestamp", 0)
@@ -297,9 +299,9 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
         "visibility": "public",
         "account": {
             "id": author_id,
-            "display_name": screen_name,
-            "username": username,
-            "acct": username,
+            "display_name": author_name,
+            "username": screen_name,
+            "acct": screen_name,
             "url": url,
             "avatar": avatar,
             "avatar_static": avatar,
@@ -357,6 +359,18 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
         videos: list[Video] = json_videos
 
         for video in videos:
+            orig_w: int = video.get("width", 0)
+            orig_h: int = video.get("height", 0)
+
+            mult = 1.0
+            if orig_w > 1920 or orig_h > 1920:  # ruff: ignore[magic-value-comparison]
+                mult = 0.5
+            if orig_w < 400 and orig_h < 400 and orig_w > 0:  # ruff: ignore[magic-value-comparison]
+                mult = 2.0
+
+            final_w = int(orig_w * mult)
+            final_h = int(orig_h * mult)
+
             url = video.get("url", "")
 
             payload["media_attachments"].append({
@@ -370,10 +384,10 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
                 "description": f"Photo by {username} on Twitter",
                 "meta": {
                     "original": {
-                        "width": video.get("width", 0),
-                        "height": video.get("height", 0),
-                        "size": f"{video.get('width', 0)}x{video.get('height', 0)}",
-                        "aspect": video.get("width", 0) / video.get("height", 1) if video.get("height", 0) else 0,
+                        "width": final_w,
+                        "height": final_h,
+                        "size": f"{final_w}x{final_h}",
+                        "aspect": final_w / final_h if final_h else 0,
                         "duration": video.get("duration", 0),
                     }
                 },
@@ -386,7 +400,7 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
 
 
 @get("/users/{username:str}/statuses/{tweet_id:str}")
-async def users_statuses(  # ruff: ignore[unused-async]
+async def users_statuses(  # ruff: ignore[too-many-locals, unused-async]
     request: Request,
     username: Annotated[str, PathParameter()],
     tweet_id: Annotated[str, PathParameter()],
@@ -410,7 +424,8 @@ async def users_statuses(  # ruff: ignore[unused-async]
     author: dict[str, Any] = json_data.get("author", {})
 
     author_id: str = author.get("id", "")
-    screen_name: str = author.get("screen_name", "screen_name")
+    author_name: str = author.get("name", "name")
+    screen_name: str = author.get("screen_name", username)
     avatar: str = author.get("avatar_url", "https://lovinator.space/KaoFace.png")
 
     created_timestamp: int = status.get("created_timestamp", 0)
@@ -433,9 +448,9 @@ async def users_statuses(  # ruff: ignore[unused-async]
         "visibility": "public",
         "account": {
             "id": author_id,
-            "display_name": screen_name,
-            "username": username,
-            "acct": username,
+            "display_name": author_name,
+            "username": screen_name,
+            "acct": screen_name,
             "url": url,
             "avatar": avatar,
             "avatar_static": avatar,
@@ -493,6 +508,18 @@ async def users_statuses(  # ruff: ignore[unused-async]
         videos: list[Video] = json_videos
 
         for video in videos:
+            orig_w: int = video.get("width", 0)
+            orig_h: int = video.get("height", 0)
+
+            mult = 1.0
+            if orig_w > 1920 or orig_h > 1920:  # ruff: ignore[magic-value-comparison]
+                mult = 0.5
+            if orig_w < 400 and orig_h < 400 and orig_w > 0:  # ruff: ignore[magic-value-comparison]
+                mult = 2.0
+
+            final_w = int(orig_w * mult)
+            final_h = int(orig_h * mult)
+
             url = video.get("url", "")
 
             payload["media_attachments"].append({
@@ -506,10 +533,10 @@ async def users_statuses(  # ruff: ignore[unused-async]
                 "description": f"Photo by {username} on Twitter",
                 "meta": {
                     "original": {
-                        "width": video.get("width", 0),
-                        "height": video.get("height", 0),
-                        "size": f"{video.get('width', 0)}x{video.get('height', 0)}",
-                        "aspect": video.get("width", 0) / video.get("height", 1) if video.get("height", 0) else 0,
+                        "width": final_w,
+                        "height": final_h,
+                        "size": f"{final_w}x{final_h}",
+                        "aspect": final_w / final_h if final_h else 0,
                         "duration": video.get("duration", 0),
                     }
                 },
