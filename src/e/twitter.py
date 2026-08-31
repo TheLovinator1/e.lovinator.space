@@ -159,6 +159,15 @@ def get_tweet(tweet_id: str) -> dict[str, Any]:
     twitter_download_path.mkdir(parents=True, exist_ok=True)
     (twitter_download_path / f"{tweet_id}.json").write_text(str(json_data), encoding="utf-8")
 
+    # If the tweet has a translation, replace the original text with the translated text
+    status: dict[str, Any] = json_data.get("status") or {}
+    translation: dict[str, Any] = status.get("translation") or {}
+    if translation:
+        translated_text: str = str(translation.get("text") or "")
+        if translated_text:
+            status["text"] = translated_text
+            json_data["status"] = status
+
     return json_data
 
 
