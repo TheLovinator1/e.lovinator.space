@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html
 import json
+import re
 from datetime import UTC
 from datetime import datetime
 from ipaddress import IPv4Address
@@ -10,6 +12,7 @@ from typing import Annotated
 from typing import Any
 from typing import Literal
 from typing import TypedDict
+from urllib.parse import urlparse
 
 import niquests
 from litestar import Request
@@ -76,12 +79,9 @@ def format_count(count: int) -> str:
     return str(count)
 
 
-def get_emoji_poop(tweet_id: str, *, html: bool = True) -> str:
+def get_emoji_poop(status: dict[str, Any], *, html: bool = True) -> str:
     """Returns a string with emoji and engagement counts for a tweet."""
     emoji_poop: str = ""
-
-    tweet_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
-    status: dict[str, Any] = tweet_data.get("status") or {}
 
     bookmarks: int = safe_int(status.get("bookmarks"))
     likes: int = safe_int(status.get("likes"))
@@ -135,7 +135,61 @@ async def is_discord_client(client_ip: IPv4Address | IPv6Address) -> bool:
         return True
 
     ips: DiscordIPs = await get_discord_ips()
+
+    # Discord's IP range feed only ever publishes IPv4 prefixes, so IPv6 clients never match here.
     return any(isinstance(client_ip, IPv4Address) and client_ip in prefix.ipv4_prefix for prefix in ips.prefixes)
+
+
+def convert_urls_to_links(text: str, facets: list[dict[str, Any]]) -> str:
+    """For each URL in the tweet text, replace it with an HTML anchor tag linking to the resolved URL.
+
+    Matches by substring rather than facet indices: indices are only valid against
+    ``raw_text.text``, but ``text`` here may instead be a translated replacement whose
+    length/offsets don't line up with those indices (see ``get_tweet``).
+
+    The whole text is HTML-escaped first so tweet content can never inject markup; anchors
+    are then spliced in by matching against the escaped form of each facet's URL.
+
+    Args:
+        text: Tweet text where URL facets have already been resolved to their real destinations.
+        facets: The facets from "raw_text.facets".
+
+    Returns:
+        The escaped text with resolved URLs wrapped in <a> HTML tags.
+    """
+    anchors: dict[str, str] = {}
+    for facet in facets:
+        if facet.get("type") != "url":
+            continue
+
+        replacement: str = str(facet.get("replacement") or "")
+        if not replacement:
+            continue
+
+        # Only linkify http(s) URLs; reject javascript:/data:/etc. schemes that could execute on click.
+        if urlparse(replacement).scheme.lower() not in {"http", "https"}:
+            continue
+
+        escaped_replacement: str = html.escape(replacement, quote=True)
+        if escaped_replacement in anchors:
+            continue
+
+        display: str = str(facet.get("display") or replacement)
+        href: str = html.escape(replacement, quote=True)
+        label: str = html.escape(display)
+        anchors[escaped_replacement] = f'<a href="{href}">{label}</a>'
+
+    escaped_text: str = html.escape(text, quote=True)
+
+    if not anchors:
+        return escaped_text
+
+    # Match longest URLs first so a shorter URL that's a substring of a longer one
+    # (e.g. https://example.com/path vs https://example.com/path/extra) can't clobber it,
+    # and do it in a single pass so an inserted anchor's href is never re-scanned.
+    pattern = re.compile("|".join(re.escape(url) for url in sorted(anchors, key=len, reverse=True)))
+    return pattern.sub(lambda match: anchors[match.group(0)], escaped_text)
+
 
 def get_tweet(tweet_id: str) -> dict[str, Any]:
     """Returns tweet from fxtwitter API."""
@@ -155,16 +209,16 @@ def get_tweet(tweet_id: str) -> dict[str, Any]:
 
     json_data = get_tweet_data(tweet_id, json_data, user_id)
 
-    # If the tweet has a translation, replace the original text with the translated text
     status: dict[str, Any] = json_data.get("status") or {}
+
     translation: dict[str, Any] = status.get("translation") or {}
-    if translation:
-        translated_text: str = str(translation.get("text") or "")
-        if translated_text:
-            status["text"] = translated_text
-            json_data["status"] = status
+    translated_text: str = str(translation.get("text") or "")
+    if translated_text:
+        status["text"] = translated_text
+        json_data["status"] = status
 
     return json_data
+
 
 def get_tweet_data(tweet_id: str, json_data: dict[str, Any], user_id: str) -> dict[str, Any]:
     """Returns tweet data from cache or downloads it if not cached."""
@@ -173,7 +227,9 @@ def get_tweet_data(tweet_id: str, json_data: dict[str, Any], user_id: str) -> di
 
     if not (twitter_download_path / f"{tweet_id}.json").exists():
         logger.info("Downloading tweet: %s", tweet_id)
-        (twitter_download_path / f"{tweet_id}.json").write_text(str(json_data), encoding="utf-8")
+        (twitter_download_path / f"{tweet_id}.json").write_text(
+            json.dumps(json_data, ensure_ascii=False), encoding="utf-8"
+        )
     else:
         logger.info("Tweet already downloaded: %s", tweet_id)
         json_data = json.loads((twitter_download_path / f"{tweet_id}.json").read_text(encoding="utf-8"))
@@ -193,6 +249,8 @@ class Photo(TypedDict):
     """The URL of the photo."""
 
     width: int
+    """The width of the photo in pixels."""
+
     height: int
     """The height of the photo in pixels."""
 
@@ -247,8 +305,11 @@ def build_mastodon_status(tweet_id: str, json_data: dict[str, Any]) -> dict[str,
     created_at: str = datetime.fromtimestamp(created_timestamp, UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
 
     text: str = str(status.get("text") or "")
-    content: str = text.replace("\n", "<br>\u200a\u200a")
-    stats_html: str = get_emoji_poop(tweet_id=tweet_id, html=True)
+    raw_text: dict[str, Any] = status.get("raw_text") or {}
+    facets: list[dict[str, Any]] = raw_text.get("facets") or []
+
+    content: str = convert_urls_to_links(text, facets).replace("\n", "<br>\u200a\u200a")
+    stats_html: str = get_emoji_poop(status, html=True)
     content = f"{content}<br><br>{stats_html}"
 
     url: str = f"https://e.lovinator.space/{screen_name}/status/{tweet_id}"
@@ -400,7 +461,7 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
 
     text: str = str(status.get("text") or "").strip()
     title: str = text[:200]
-    emoji_poop: str = get_emoji_poop(tweet_id=tweet_id, html=False)
+    emoji_poop: str = get_emoji_poop(status, html=False)
 
     photos: list[Photo] = [
         {
@@ -509,7 +570,7 @@ async def tweet_status_api(  # ruff: ignore[unused-async]
         return Response(content={"error": "Not found"}, status_code=404, media_type="application/json")
 
     payload = build_mastodon_status(tweet_id, json_data)
-    return Response(content=json.dumps(payload), media_type="application/json")
+    return Response(content=payload, media_type="application/json")
 
 
 @get("/users/{username:str}/statuses/{tweet_id:str}")
@@ -538,7 +599,7 @@ async def users_statuses(  # ruff: ignore[unused-async]
         return Response(content={"error": "Not found"}, status_code=404, media_type="application/json")
 
     payload = build_mastodon_status(tweet_id, json_data)
-    return Response(content=json.dumps(payload), media_type="application/json")
+    return Response(content=payload, media_type="application/json")
 
 
 @get("/_oembed/{username:str}/{tweet_id:str}")
@@ -561,16 +622,18 @@ async def tweet_oembed(  # ruff: ignore[unused-async]
         The oEmbed document as JSON.
     """
     try:
-        get_tweet(tweet_id=tweet_id)  # ensure it exists
+        oembed_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
     except niquests.HTTPError:
         return Response(content={"error": "Not found"}, status_code=404, media_type="application/json")
+
+    status: dict[str, Any] = oembed_data.get("status") or {}
 
     # Renders as old text at top of embed.
     # Use for engagement stats, reply indicators, or any primary label.
     # This OVERRIDES the Mastodon account.display_name.
     # TODO(TheLovinator): Add reply indicators: "↪ Replying to @another_user"  # ruff: ignore[missing-todo-link]
     # TODO(TheLovinator): Add Thread indicator: "↪ Thread by @user"  # ruff: ignore[missing-todo-link]
-    author_name: str = get_emoji_poop(tweet_id=tweet_id, html=False)
+    author_name: str = get_emoji_poop(status, html=False)
 
     # Link target for the author line.
     # Usually the original post URL.
@@ -597,6 +660,6 @@ async def tweet_oembed(  # ruff: ignore[unused-async]
     }
 
     return Response(
-        content=json.dumps(payload),
+        content=payload,
         media_type="application/json",
     )
