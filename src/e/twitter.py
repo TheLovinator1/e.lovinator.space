@@ -228,13 +228,13 @@ def get_tweet_data(tweet_id: str, json_data: dict[str, Any], user_id: str) -> di
     cache_file: Path = twitter_download_path / f"{tweet_id}.json"
 
     if cache_file.exists():
-        logger.info("Tweet already downloaded: %s", tweet_id)
+        logger.info(f"Tweet already downloaded: {tweet_id}")
         try:
             return json.loads(cache_file.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            logger.warning("Cached tweet %s was corrupted, re-downloading", tweet_id)
+            logger.warning(f"Cached tweet {tweet_id} was corrupted, re-downloading")
 
-    logger.info("Downloading tweet: %s", tweet_id)
+    logger.info(f"Downloading tweet: {tweet_id}")
     cache_file.write_text(json.dumps(json_data, ensure_ascii=False), encoding="utf-8")
     return json_data
 
@@ -448,7 +448,7 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
     try:
         json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
     except niquests.HTTPError as e:
-        logger.error("Failed to fetch tweet: %s", tweet_id, exc_info=e)
+        logger.error(f"Failed to fetch tweet: {tweet_id}", exc_info=e)
         return Redirect(f"https://x.com/{username}/status/{tweet_id}", status_code=302)
 
     status: dict[str, Any] = json_data.get("status") or {}
@@ -460,7 +460,7 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
     tweet_url: str = f"https://x.com/{screen_name}/status/{tweet_id}"
     local_url: str = f"https://e.lovinator.space/{screen_name}/status/{tweet_id}"
 
-    logger.info("Serving tweet embed: %s", tweet_id)
+    logger.info(f"Serving tweet embed: {tweet_id}")
 
     text: str = str(status.get("text") or "").strip()
     title: str = text[:200]
