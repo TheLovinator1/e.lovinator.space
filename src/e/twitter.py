@@ -243,7 +243,7 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
             "tweet_id": tweet_id,
             "title": title,
             "description": emoji_poop,
-            "url": tweet_url,
+            "url": f"https://e.lovinator.space/{username}/status/{tweet_id}",
             "site": f"@{username}",
             "creator": f"@{username}",
             "activity_url": f"https://e.lovinator.space/users/{username}/statuses/{tweet_id}",
@@ -280,7 +280,6 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
 
     author_id: str = author.get("id", "")
     author_name: str = author.get("name", "name")
-
     screen_name: str = author.get("screen_name", "screen_name")
 
     avatar: str = author.get("avatar_url", "https://lovinator.space/KaoFace.png")
@@ -294,7 +293,7 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
     stats_html: str = get_emoji_poop(tweet_id=tweet_id, html=True)
     content = f"{content}<br><br>{stats_html}"
 
-    url: str = f"https://twitter.com/{screen_name}/status/{tweet_id}"
+    url: str = f"https://e.lovinator.space/{screen_name}/status/{tweet_id}"
 
     payload: dict[str, Any] = {
         "id": tweet_id,
@@ -321,12 +320,11 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
     media: dict[str, Any] = status.get("media", {})
     if photos := media.get("photos"):
         for photo in photos:
-            url = photo.get("url", "")
-
+            photo_url = photo.get("url", "")
             payload["media_attachments"].append({
                 "id": photo.get("id", ""),
                 "type": "image",
-                "url": url,
+                "url": photo_url,
                 "preview_url": None,
                 "remote_url": None,
                 "preview_remote_url": None,
@@ -357,12 +355,12 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
             final_w = int(orig_w * mult)
             final_h = int(orig_h * mult)
 
-            url = video.get("url", "")
+            video_url = video.get("url", "")
 
             payload["media_attachments"].append({
                 "id": video.get("id", ""),
                 "type": "video",
-                "url": url,
+                "url": video_url,
                 "preview_url": video.get("thumbnail_url", ""),
                 "remote_url": None,
                 "preview_remote_url": None,
@@ -423,7 +421,7 @@ async def users_statuses(  # ruff: ignore[too-many-locals, unused-async]
     stats_html: str = get_emoji_poop(tweet_id=tweet_id, html=True)
     content = f"{content}<br><br>{stats_html}"
 
-    url: str = f"https://twitter.com/{username}/status/{tweet_id}"
+    url: str = f"https://e.lovinator.space/{screen_name}/status/{tweet_id}"
 
     payload: dict[str, Any] = {
         "id": tweet_id,
@@ -450,12 +448,11 @@ async def users_statuses(  # ruff: ignore[too-many-locals, unused-async]
     media: dict[str, Any] = status.get("media", {})
     if photos := media.get("photos"):
         for photo in photos:
-            url = photo.get("url", "")
-
+            photo_url = photo.get("url", "")
             payload["media_attachments"].append({
                 "id": photo.get("id", ""),
                 "type": "image",
-                "url": url,
+                "url": photo_url,
                 "preview_url": None,
                 "remote_url": None,
                 "preview_remote_url": None,
@@ -486,12 +483,12 @@ async def users_statuses(  # ruff: ignore[too-many-locals, unused-async]
             final_w = int(orig_w * mult)
             final_h = int(orig_h * mult)
 
-            url = video.get("url", "")
+            video_url = video.get("url", "")
 
             payload["media_attachments"].append({
                 "id": video.get("id", ""),
                 "type": "video",
-                "url": url,
+                "url": video_url,
                 "preview_url": video.get("thumbnail_url", ""),
                 "remote_url": None,
                 "preview_remote_url": None,
