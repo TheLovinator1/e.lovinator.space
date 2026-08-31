@@ -79,7 +79,6 @@ async def is_discord_client(client_ip: IPv4Address | IPv6Address) -> bool:
 @cache
 def get_tweet(tweet_id: str) -> dict[str, Any]:
     """Returns tweet from fxtwitter API."""
-    # https://api.fxtwitter.com/2/status/2092632316522709394?about_account=1&lang=en
     api_url: str = f"https://api.fxtwitter.com/2/status/{tweet_id}?about_account=1&lang=en"
 
     response: niquests.Response = niquests.get(
@@ -177,7 +176,6 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
     title: str = text[:200]
 
     emoji_poop: str = get_emoji_poop(tweet_id=tweet_id, html=False)
-    emoji_poop: str = f"a{emoji_poop}"
 
     photos: list[Photo] = [
         {
@@ -196,13 +194,21 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
         item: dict[str, Any] = videos[0]
 
         if item.get("url"):
+            orig_w = int(item.get("width") or 1280)
+            orig_h = int(item.get("height") or 720)
+            mult = 1.0
+            if orig_w > 1920 or orig_h > 1920:  # ruff: ignore[magic-value-comparison]
+                mult = 0.5
+            if orig_w < 400 and orig_h < 400 and orig_w > 0:  # ruff: ignore[magic-value-comparison]
+                mult = 2.0
+
             video = {
                 "id": str(item.get("id") or ""),
                 "url": str(item.get("url") or ""),
                 "preview_url": str(item.get("thumbnail_url") or ""),
                 "duration": float(item.get("duration") or 0),
-                "width": int(item.get("width") or 1280),
-                "height": int(item.get("height") or 720),
+                "width": int(orig_w * mult),
+                "height": int(orig_h * mult),
                 "format": str(item.get("format") or ""),
                 "content_type": str(item.get("content_type") or "video/mp4"),
             }
@@ -273,9 +279,9 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
     author: dict[str, Any] = json_data.get("author", {})
 
     author_id: str = author.get("id", "")
-    username: str = author.get("name", "screen_name")
     author_name: str = author.get("name", "name")
-    screen_name: str = author.get("screen_name", username)
+
+    screen_name: str = author.get("screen_name", "screen_name")
 
     avatar: str = author.get("avatar_url", "https://lovinator.space/KaoFace.png")
 
@@ -288,7 +294,7 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
     stats_html: str = get_emoji_poop(tweet_id=tweet_id, html=True)
     content = f"{content}<br><br>{stats_html}"
 
-    url: str = f"https://twitter.com/{username}/status/{tweet_id}"
+    url: str = f"https://twitter.com/{screen_name}/status/{tweet_id}"
 
     payload: dict[str, Any] = {
         "id": tweet_id,
@@ -312,7 +318,6 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
         "emojis": [],
     }
 
-    # Append media attachments if present
     media: dict[str, Any] = status.get("media", {})
     if photos := media.get("photos"):
         for photo in photos:
@@ -326,7 +331,7 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
                 "remote_url": None,
                 "preview_remote_url": None,
                 "text_url": None,
-                "description": f"Photo by {username} on Twitter",
+                "description": f"Photo by {screen_name} on Twitter",
                 "meta": {
                     "original": {
                         "width": photo.get("width", 0),
@@ -338,26 +343,7 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
             })
 
     if json_videos := media.get("videos"):
-        # TODO(TheLovinator): Handle multiple videos in a tweet, if applicable. Currently only the first video is processed.  # ruff: ignore[missing-todo-link]
-
-        # TODO(TheLovinator): Handle video scaling for Discord embeds.  # ruff: ignore[missing-todo-link]
-        # Discord refuses to render videos with dimensions >1920px and renders very small videos as tiny embeds. Apply this scaling:
-        # let sizeMultiplier = 1
-        # if (width > 1920 || height > 1920) {
-        # sizeMultiplier = 0.5   // Scale down 50%
-        # }
-        # if (width < 400 && height < 400) {
-        # sizeMultiplier = 2     // Scale up 200%
-        # }
-        # Note: The downscale check uses OR (either dimension >1920), but the upscale check uses AND (both dimensions <400).
-        # Also look at HTML:
-        # <meta property="og:video:width" content="960"/>   <!-- was 1920, scaled 50% -->
-        # <meta property="og:video:height" content="540"/>   <!-- was 1080, scaled 50% -->
-        # <meta property="twitter:player:width" content="960"/>
-        # <meta property="twitter:player:height" content="540"/>
-
         videos: list[Video] = json_videos
-
         for video in videos:
             orig_w: int = video.get("width", 0)
             orig_h: int = video.get("height", 0)
@@ -381,7 +367,7 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
                 "remote_url": None,
                 "preview_remote_url": None,
                 "text_url": None,
-                "description": f"Photo by {username} on Twitter",
+                "description": f"Video by {screen_name} on Twitter",
                 "meta": {
                     "original": {
                         "width": final_w,
@@ -461,7 +447,6 @@ async def users_statuses(  # ruff: ignore[too-many-locals, unused-async]
         "emojis": [],
     }
 
-    # Append media attachments if present
     media: dict[str, Any] = status.get("media", {})
     if photos := media.get("photos"):
         for photo in photos:
@@ -487,26 +472,7 @@ async def users_statuses(  # ruff: ignore[too-many-locals, unused-async]
             })
 
     if json_videos := media.get("videos"):
-        # TODO(TheLovinator): Handle multiple videos in a tweet, if applicable. Currently only the first video is processed.  # ruff: ignore[missing-todo-link]
-
-        # TODO(TheLovinator): Handle video scaling for Discord embeds.  # ruff: ignore[missing-todo-link]
-        # Discord refuses to render videos with dimensions >1920px and renders very small videos as tiny embeds. Apply this scaling:
-        # let sizeMultiplier = 1
-        # if (width > 1920 || height > 1920) {
-        # sizeMultiplier = 0.5   // Scale down 50%
-        # }
-        # if (width < 400 && height < 400) {
-        # sizeMultiplier = 2     // Scale up 200%
-        # }
-        # Note: The downscale check uses OR (either dimension >1920), but the upscale check uses AND (both dimensions <400).
-        # Also look at HTML:
-        # <meta property="og:video:width" content="960"/>   <!-- was 1920, scaled 50% -->
-        # <meta property="og:video:height" content="540"/>   <!-- was 1080, scaled 50% -->
-        # <meta property="twitter:player:width" content="960"/>
-        # <meta property="twitter:player:height" content="540"/>
-
         videos: list[Video] = json_videos
-
         for video in videos:
             orig_w: int = video.get("width", 0)
             orig_h: int = video.get("height", 0)
@@ -530,7 +496,7 @@ async def users_statuses(  # ruff: ignore[too-many-locals, unused-async]
                 "remote_url": None,
                 "preview_remote_url": None,
                 "text_url": None,
-                "description": f"Photo by {username} on Twitter",
+                "description": f"Video by {username} on Twitter",
                 "meta": {
                     "original": {
                         "width": final_w,
@@ -573,7 +539,6 @@ async def tweet_oembed(  # ruff: ignore[unused-async]
     # TODO(TheLovinator): Add reply indicators: "↪ Replying to @another_user"  # ruff: ignore[missing-todo-link]
     # TODO(TheLovinator): Add Thread indicator: "↪ Thread by @user"  # ruff: ignore[missing-todo-link]
     author_name: str = get_emoji_poop(tweet_id=tweet_id, html=False)
-    author_name: str = f"c{author_name}"
 
     # Link target for the author line.
     # Usually the original post URL.
