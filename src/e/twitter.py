@@ -83,19 +83,20 @@ def get_emoji_poop(tweet_id: str, *, html: bool = True) -> str:
 
     tweet_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
     status: dict[str, Any] = tweet_data.get("status") or {}
-    views: int = safe_int(status.get("views"))
-    replies: int = safe_int(status.get("replies"))
-    likes: int = safe_int(status.get("likes"))
+    
     bookmarks: int = safe_int(status.get("bookmarks"))
-    quotes: int = safe_int(status.get("quotes"))
+    likes: int = safe_int(status.get("likes"))
+    replies: int = safe_int(status.get("replies"))
+    reposts: int = safe_int(status.get("reposts"))
+    views: int = safe_int(status.get("views"))
 
     if not html:
         if views > 0:
             emoji_poop += f"👁️ {format_count(views)} "
         if replies > 0:
             emoji_poop += f"💬 {format_count(replies)} "
-        if quotes > 0:
-            emoji_poop += f"🔁 {format_count(quotes)} "
+        if reposts > 0:
+            emoji_poop += f"🔁 {format_count(reposts)} "
         if likes > 0:
             emoji_poop += f"❤️ {format_count(likes)} "
         if bookmarks > 0:
@@ -106,8 +107,8 @@ def get_emoji_poop(tweet_id: str, *, html: bool = True) -> str:
         emoji_poop += f"👁️ {format_count(views)}&ensp;"
     if replies > 0:
         emoji_poop += f"💬 {format_count(replies)}&ensp;"
-    if quotes > 0:
-        emoji_poop += f"🔁 {format_count(quotes)}&ensp;"
+    if reposts > 0:
+        emoji_poop += f"🔁 {format_count(reposts)}&ensp;"
     if likes > 0:
         emoji_poop += f"❤️ {format_count(likes)}&ensp;"
     if bookmarks > 0:
