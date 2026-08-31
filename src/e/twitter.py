@@ -29,23 +29,51 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def get_emoji_poop(tweet_id: str, *, html: bool = True) -> str:
-    """Returns a string with emoji and engagement counts for a tweet.
+def safe_int(val: str | int | None, default: int = 0) -> int:
+    """Safely cast to int, preventing 500 errors when API returns null.
 
     Args:
-        tweet_id: The ID of the tweet.
-        html: Whether to return the string as HTML or plain text.
+        val: The value to cast to int.
+        default: The default value to return if val is None or cannot be cast to int.
 
     Returns:
-        A string with emoji and engagement counts for the tweet.
+        The int value of val, or default if val is None or cannot be cast to int
     """
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except ValueError, TypeError:
+        return default
+
+
+def safe_float(val: str | int | None, default: float = 0.0) -> float:
+    """Safely cast to float, preventing 500 errors when API returns null.
+
+    Args:
+        val: The value to cast to float.
+        default: The default value to return if val is None or cannot be cast to float.
+
+    Returns:
+        The float value of val, or default if val is None or cannot be cast to float
+    """
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except ValueError, TypeError:
+        return default
+
+
+def get_emoji_poop(tweet_id: str, *, html: bool = True) -> str:
+    """Returns a string with emoji and engagement counts for a tweet."""
     tweet_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
 
-    status: dict[str, Any] = tweet_data.get("status", {})
-    replies: int = status.get("replies", 0)
-    likes: int = status.get("likes", 0)
-    bookmarks: int = status.get("bookmarks", 0)
-    quotes: int = status.get("quotes", 0)
+    status: dict[str, Any] = tweet_data.get("status") or {}
+    replies: int = safe_int(status.get("replies"))
+    likes: int = safe_int(status.get("likes"))
+    bookmarks: int = safe_int(status.get("bookmarks"))
+    quotes: int = safe_int(status.get("quotes"))
 
     if not html:
         return f"💬 {replies} 🔁 {quotes} ❤️ {likes} 🔖 {bookmarks}"
@@ -90,8 +118,8 @@ def get_tweet(tweet_id: str) -> dict[str, Any]:
     response.raise_for_status()
 
     json_data: dict[str, Any] = response.json()
-    author: dict[str, Any] = json_data.get("author", {})
-    user_id: str = author.get("id", "")
+    author: dict[str, Any] = json_data.get("author") or {}
+    user_id: str = str(author.get("id") or "")
 
     twitter_download_path: Path = DATA_DIR / "Twitter" / "Downloads" / f"{user_id}"
     twitter_download_path.mkdir(parents=True, exist_ok=True)
@@ -113,8 +141,6 @@ class Photo(TypedDict):
     """The URL of the photo."""
 
     width: int
-    """The width of the photo in pixels."""
-
     height: int
     """The height of the photo in pixels."""
 
@@ -147,6 +173,150 @@ class Video(TypedDict):
     """The content type of the video, e.g., "video/mp4"."""
 
 
+def build_mastodon_status(tweet_id: str, json_data: dict[str, Any]) -> dict[str, Any]:  # ruff: ignore[too-many-locals]
+    """Generates the bulletproof Mastodon Status JSON, ensuring no missing fields crash the parser.
+
+    Args:
+        tweet_id: The ID of the tweet.
+        json_data: The JSON data of the tweet.
+
+    Returns:
+        A dictionary representing the Mastodon Status JSON.
+    """
+    status: dict[str, Any] = json_data.get("status") or {}
+    author: dict[str, Any] = json_data.get("author") or {}
+
+    author_id: str = str(author.get("id") or "")
+    author_name: str = str(author.get("name") or "Unknown")
+    screen_name: str = str(author.get("screen_name") or "unknown")
+    avatar: str = str(author.get("avatar_url") or "https://lovinator.space/KaoFace.png")
+
+    created_timestamp = safe_int(status.get("created_timestamp"))
+    created_at: str = datetime.fromtimestamp(created_timestamp, UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+    text: str = str(status.get("text") or "")
+    content: str = text.replace("\n", "<br>\u200a\u200a")
+    stats_html: str = get_emoji_poop(tweet_id=tweet_id, html=True)
+    content = f"{content}<br><br>{stats_html}"
+
+    url: str = f"https://e.lovinator.space/{screen_name}/status/{tweet_id}"
+
+    payload: dict[str, Any] = {
+        "id": tweet_id,
+        "url": url,
+        "uri": url,
+        "created_at": created_at,
+        "edited_at": None,
+        "reblog": None,
+        "in_reply_to_id": None,
+        "in_reply_to_account_id": None,
+        "language": "en",
+        "content": content,
+        "spoiler_text": "",
+        "visibility": "public",
+        "application": {"name": "Twitter", "website": None},
+        "media_attachments": [],
+        "account": {
+            "id": author_id,
+            "display_name": author_name,
+            "username": screen_name,
+            "acct": screen_name,
+            "url": url,
+            "uri": url,
+            "created_at": created_at,
+            "locked": False,
+            "bot": False,
+            "discoverable": True,
+            "indexable": False,
+            "group": False,
+            "avatar": avatar,
+            "avatar_static": avatar,
+            "header": "",
+            "header_static": "",
+            "followers_count": safe_int(author.get("followers")),
+            "following_count": safe_int(author.get("following")),
+            "statuses_count": safe_int(author.get("statuses")),
+            "hide_collections": False,
+            "noindex": False,
+            "emojis": [],
+            "roles": [],
+            "fields": [],
+        },
+        "mentions": [],
+        "tags": [],
+        "emojis": [],
+        "card": None,
+        "poll": None,
+    }
+
+    media: dict[str, Any] = status.get("media") or {}
+    if photos := media.get("photos"):
+        for photo in photos:
+            photo_url = str(photo.get("url") or "")
+            w = safe_int(photo.get("width"))
+            h = safe_int(photo.get("height"))
+            aspect = (w / h) if h > 0 else 0.0
+
+            payload["media_attachments"].append({
+                "id": str(photo.get("id") or "0"),
+                "type": "image",
+                "url": photo_url,
+                "preview_url": None,
+                "remote_url": None,
+                "preview_remote_url": None,
+                "text_url": None,
+                "description": f"Photo by {screen_name} on Twitter",
+                "meta": {
+                    "original": {
+                        "width": w,
+                        "height": h,
+                        "size": f"{w}x{h}",
+                        "aspect": aspect,
+                    }
+                },
+            })
+
+    if json_videos := media.get("videos"):
+        videos: list[dict] = json_videos
+        for video in videos:
+            orig_w = safe_int(video.get("width"), 1280)
+            orig_h = safe_int(video.get("height"), 720)
+
+            mult = 1.0
+            if orig_w > 1920 or orig_h > 1920:  # ruff: ignore[magic-value-comparison]
+                mult = 0.5
+            if orig_w < 400 and orig_h < 400 and orig_w > 0:  # ruff: ignore[magic-value-comparison]
+                mult = 2.0
+
+            final_w = int(orig_w * mult)
+            final_h = int(orig_h * mult)
+            video_url = str(video.get("url") or "")
+            duration = safe_float(video.get("duration"))
+            aspect = (final_w / final_h) if final_h > 0 else 0.0
+
+            payload["media_attachments"].append({
+                "id": str(video.get("id") or "0"),
+                "type": "video",
+                "url": video_url,
+                "preview_url": str(video.get("thumbnail_url") or ""),
+                "remote_url": None,
+                "preview_remote_url": None,
+                "text_url": None,
+                "description": f"Video by {screen_name} on Twitter",
+                "meta": {
+                    "original": {
+                        "width": final_w,
+                        "height": final_h,
+                        "size": f"{final_w}x{final_h}",
+                        "aspect": aspect,
+                        "duration": duration,
+                    }
+                },
+            })
+
+    return payload
+
+
 @get("/{username:str}/status/{tweet_id:str}")
 async def twitter(  # ruff: ignore[too-many-locals, unused-async]
     request: Request,
@@ -159,31 +329,34 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
         A redirect to the tweet URL for non-Discord clients, or a rendered
         HTML page with Open Graph metadata for Discord clients.
     """
-    tweet_url: str = f"https://x.com/{username}/status/{tweet_id}"
-    logger.info("Serving tweet embed: %s", tweet_id)
-
     try:
         json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
     except niquests.HTTPError as e:
         logger.error("Failed to fetch tweet: %s", tweet_id, exc_info=e)
-        return Redirect(tweet_url, status_code=302)
+        return Redirect(f"https://x.com/{username}/status/{tweet_id}", status_code=302)
 
     status: dict[str, Any] = json_data.get("status") or {}
     author: dict[str, Any] = json_data.get("author") or {}
     media: dict[str, Any] = status.get("media") or {}
 
+    # Lock everything exactly to API screen_name so JSON & HTML match perfectly
+    screen_name: str = str(author.get("screen_name") or username)
+    tweet_url: str = f"https://x.com/{screen_name}/status/{tweet_id}"
+    local_url: str = f"https://e.lovinator.space/{screen_name}/status/{tweet_id}"
+
+    logger.info("Serving tweet embed: %s", tweet_id)
+
     text: str = str(status.get("text") or "").strip()
     title: str = text[:200]
-
     emoji_poop: str = get_emoji_poop(tweet_id=tweet_id, html=False)
 
     photos: list[Photo] = [
         {
             "type": "photo",
-            "id": str(item.get("id") or ""),
+            "id": str(item.get("id") or "0"),
             "url": str(item.get("url") or ""),
-            "width": int(item.get("width") or 1280),
-            "height": int(item.get("height") or 720),
+            "width": safe_int(item.get("width"), 1280),
+            "height": safe_int(item.get("height"), 720),
         }
         for item in (media.get("photos") or [])
         if item.get("url")
@@ -192,10 +365,9 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
     video: Video | None = None
     if videos := media.get("videos"):
         item: dict[str, Any] = videos[0]
-
         if item.get("url"):
-            orig_w = int(item.get("width") or 1280)
-            orig_h = int(item.get("height") or 720)
+            orig_w = safe_int(item.get("width"), 1280)
+            orig_h = safe_int(item.get("height"), 720)
             mult = 1.0
             if orig_w > 1920 or orig_h > 1920:  # ruff: ignore[magic-value-comparison]
                 mult = 0.5
@@ -203,10 +375,10 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
                 mult = 2.0
 
             video = {
-                "id": str(item.get("id") or ""),
+                "id": str(item.get("id") or "0"),
                 "url": str(item.get("url") or ""),
                 "preview_url": str(item.get("thumbnail_url") or ""),
-                "duration": float(item.get("duration") or 0),
+                "duration": safe_float(item.get("duration")),
                 "width": int(orig_w * mult),
                 "height": int(orig_h * mult),
                 "format": str(item.get("format") or ""),
@@ -217,14 +389,14 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
     og_type: Literal["video.other", "article"] = "video.other" if video else "article"
 
     stats: dict[str, int] = {
-        "followers": int(author.get("followers") or 0),
-        "following": int(author.get("following") or 0),
-        "likes": int(author.get("likes") or 0),
-        "media_count": int(author.get("media_count") or 0),
-        "statuses": int(author.get("statuses") or 0),
+        "followers": safe_int(author.get("followers")),
+        "following": safe_int(author.get("following")),
+        "likes": safe_int(author.get("likes")),
+        "media_count": safe_int(author.get("media_count")),
+        "statuses": safe_int(author.get("statuses")),
     }
 
-    name: str = author.get("name", "name")
+    name: str = str(author.get("name") or "Unknown")
 
     response = Template(
         template_name="tweet.html",
@@ -237,27 +409,26 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
             "width": int(video["width"]) if video else 1280,
             "height": int(video["height"]) if video else 720,
             "og_type": og_type,
-            "twitter_handle": f"@{username}",
+            "twitter_handle": f"@{screen_name}",
             "tweet_url": tweet_url,
-            "username": username,
+            "username": screen_name,
             "tweet_id": tweet_id,
             "title": title,
             "description": emoji_poop,
-            "url": f"https://e.lovinator.space/{username}/status/{tweet_id}",
-            "site": f"@{username}",
-            "creator": f"@{username}",
-            "activity_url": f"https://e.lovinator.space/users/{username}/statuses/{tweet_id}",
-            "oembed_url": f"https://e.lovinator.space/_oembed/{username}/{tweet_id}",
+            "url": local_url,
+            "site": f"@{screen_name}",
+            "creator": f"@{screen_name}",
+            "activity_url": f"https://e.lovinator.space/users/{screen_name}/statuses/{tweet_id}",
+            "oembed_url": f"https://e.lovinator.space/_oembed/{screen_name}/{tweet_id}",
         },
     )
 
     response.headers["Cache-Control"] = "public, max-age=300"
-
     return response
 
 
 @get(path="/api/v1/statuses/{tweet_id:str}")
-async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
+async def tweet_status_api(  # ruff: ignore[unused-async]
     request: Request,
     tweet_id: Annotated[str, PathParameter()],
 ) -> Response:
@@ -274,117 +445,17 @@ async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
     Returns:
         The Status document as JSON.
     """
-    json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
-    status: dict[str, Any] = json_data.get("status", {})
-    author: dict[str, Any] = json_data.get("author", {})
+    try:
+        json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
+    except niquests.HTTPError:
+        return Response(content={"error": "Not found"}, status_code=404, media_type="application/json")
 
-    author_id: str = author.get("id", "")
-    author_name: str = author.get("name", "name")
-    screen_name: str = author.get("screen_name", "screen_name")
-
-    avatar: str = author.get("avatar_url", "https://lovinator.space/KaoFace.png")
-
-    created_timestamp: int = status.get("created_timestamp", 0)
-    created_at: str = datetime.fromtimestamp(created_timestamp, UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-    text: str = status.get("text", "")
-    content: str = text.replace("\n", "<br>\u200a\u200a")
-
-    stats_html: str = get_emoji_poop(tweet_id=tweet_id, html=True)
-    content = f"{content}<br><br>{stats_html}"
-
-    url: str = f"https://e.lovinator.space/{screen_name}/status/{tweet_id}"
-
-    payload: dict[str, Any] = {
-        "id": tweet_id,
-        "url": url,
-        "uri": url,
-        "created_at": created_at,
-        "content": content,
-        "visibility": "public",
-        "account": {
-            "id": author_id,
-            "display_name": author_name,
-            "username": screen_name,
-            "acct": screen_name,
-            "url": url,
-            "avatar": avatar,
-            "avatar_static": avatar,
-        },
-        "media_attachments": [],
-        "mentions": [],
-        "tags": [],
-        "emojis": [],
-    }
-
-    media: dict[str, Any] = status.get("media", {})
-    if photos := media.get("photos"):
-        for photo in photos:
-            photo_url = photo.get("url", "")
-            payload["media_attachments"].append({
-                "id": photo.get("id", ""),
-                "type": "image",
-                "url": photo_url,
-                "preview_url": None,
-                "remote_url": None,
-                "preview_remote_url": None,
-                "text_url": None,
-                "description": f"Photo by {screen_name} on Twitter",
-                "meta": {
-                    "original": {
-                        "width": photo.get("width", 0),
-                        "height": photo.get("height", 0),
-                        "size": f"{photo.get('width', 0)}x{photo.get('height', 0)}",
-                        "aspect": photo.get("width", 0) / photo.get("height", 1) if photo.get("height", 0) else 0,
-                    }
-                },
-            })
-
-    if json_videos := media.get("videos"):
-        videos: list[Video] = json_videos
-        for video in videos:
-            orig_w: int = video.get("width", 0)
-            orig_h: int = video.get("height", 0)
-
-            mult = 1.0
-            if orig_w > 1920 or orig_h > 1920:  # ruff: ignore[magic-value-comparison]
-                mult = 0.5
-            if orig_w < 400 and orig_h < 400 and orig_w > 0:  # ruff: ignore[magic-value-comparison]
-                mult = 2.0
-
-            final_w = int(orig_w * mult)
-            final_h = int(orig_h * mult)
-
-            video_url = video.get("url", "")
-
-            payload["media_attachments"].append({
-                "id": video.get("id", ""),
-                "type": "video",
-                "url": video_url,
-                "preview_url": video.get("thumbnail_url", ""),
-                "remote_url": None,
-                "preview_remote_url": None,
-                "text_url": None,
-                "description": f"Video by {screen_name} on Twitter",
-                "meta": {
-                    "original": {
-                        "width": final_w,
-                        "height": final_h,
-                        "size": f"{final_w}x{final_h}",
-                        "aspect": final_w / final_h if final_h else 0,
-                        "duration": video.get("duration", 0),
-                    }
-                },
-            })
-
-    return Response(
-        content=json.dumps(payload),
-        media_type="application/json",
-    )
+    payload = build_mastodon_status(tweet_id, json_data)
+    return Response(content=json.dumps(payload), media_type="application/json")
 
 
 @get("/users/{username:str}/statuses/{tweet_id:str}")
-async def users_statuses(  # ruff: ignore[too-many-locals, unused-async]
+async def users_statuses(  # ruff: ignore[unused-async]
     request: Request,
     username: Annotated[str, PathParameter()],
     tweet_id: Annotated[str, PathParameter()],
@@ -403,112 +474,13 @@ async def users_statuses(  # ruff: ignore[too-many-locals, unused-async]
     Returns:
         The Status document as JSON.
     """
-    json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
-    status: dict[str, Any] = json_data.get("status", {})
-    author: dict[str, Any] = json_data.get("author", {})
+    try:
+        json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
+    except niquests.HTTPError:
+        return Response(content={"error": "Not found"}, status_code=404, media_type="application/json")
 
-    author_id: str = author.get("id", "")
-    author_name: str = author.get("name", "name")
-    screen_name: str = author.get("screen_name", username)
-    avatar: str = author.get("avatar_url", "https://lovinator.space/KaoFace.png")
-
-    created_timestamp: int = status.get("created_timestamp", 0)
-    created_at: str = datetime.fromtimestamp(created_timestamp, UTC).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-    text: str = status.get("text", "")
-    content: str = text.replace("\n", "<br>\u200a\u200a")
-
-    stats_html: str = get_emoji_poop(tweet_id=tweet_id, html=True)
-    content = f"{content}<br><br>{stats_html}"
-
-    url: str = f"https://e.lovinator.space/{screen_name}/status/{tweet_id}"
-
-    payload: dict[str, Any] = {
-        "id": tweet_id,
-        "url": url,
-        "uri": url,
-        "created_at": created_at,
-        "content": content,
-        "visibility": "public",
-        "account": {
-            "id": author_id,
-            "display_name": author_name,
-            "username": screen_name,
-            "acct": screen_name,
-            "url": url,
-            "avatar": avatar,
-            "avatar_static": avatar,
-        },
-        "media_attachments": [],
-        "mentions": [],
-        "tags": [],
-        "emojis": [],
-    }
-
-    media: dict[str, Any] = status.get("media", {})
-    if photos := media.get("photos"):
-        for photo in photos:
-            photo_url = photo.get("url", "")
-            payload["media_attachments"].append({
-                "id": photo.get("id", ""),
-                "type": "image",
-                "url": photo_url,
-                "preview_url": None,
-                "remote_url": None,
-                "preview_remote_url": None,
-                "text_url": None,
-                "description": f"Photo by {username} on Twitter",
-                "meta": {
-                    "original": {
-                        "width": photo.get("width", 0),
-                        "height": photo.get("height", 0),
-                        "size": f"{photo.get('width', 0)}x{photo.get('height', 0)}",
-                        "aspect": photo.get("width", 0) / photo.get("height", 1) if photo.get("height", 0) else 0,
-                    }
-                },
-            })
-
-    if json_videos := media.get("videos"):
-        videos: list[Video] = json_videos
-        for video in videos:
-            orig_w: int = video.get("width", 0)
-            orig_h: int = video.get("height", 0)
-
-            mult = 1.0
-            if orig_w > 1920 or orig_h > 1920:  # ruff: ignore[magic-value-comparison]
-                mult = 0.5
-            if orig_w < 400 and orig_h < 400 and orig_w > 0:  # ruff: ignore[magic-value-comparison]
-                mult = 2.0
-
-            final_w = int(orig_w * mult)
-            final_h = int(orig_h * mult)
-
-            video_url = video.get("url", "")
-
-            payload["media_attachments"].append({
-                "id": video.get("id", ""),
-                "type": "video",
-                "url": video_url,
-                "preview_url": video.get("thumbnail_url", ""),
-                "remote_url": None,
-                "preview_remote_url": None,
-                "text_url": None,
-                "description": f"Video by {username} on Twitter",
-                "meta": {
-                    "original": {
-                        "width": final_w,
-                        "height": final_h,
-                        "size": f"{final_w}x{final_h}",
-                        "aspect": final_w / final_h if final_h else 0,
-                        "duration": video.get("duration", 0),
-                    }
-                },
-            })
-
-    return Response(
-        content=json.dumps(payload),
-        media_type="application/json",
-    )
+    payload = build_mastodon_status(tweet_id, json_data)
+    return Response(content=json.dumps(payload), media_type="application/json")
 
 
 @get("/_oembed/{username:str}/{tweet_id:str}")
@@ -530,6 +502,11 @@ async def tweet_oembed(  # ruff: ignore[unused-async]
     Returns:
         The oEmbed document as JSON.
     """
+    try:
+        get_tweet(tweet_id=tweet_id)  # ensure it exists
+    except niquests.HTTPError:
+        return Response(content={"error": "Not found"}, status_code=404, media_type="application/json")
+
     # Renders as old text at top of embed.
     # Use for engagement stats, reply indicators, or any primary label.
     # This OVERRIDES the Mastodon account.display_name.
@@ -549,10 +526,6 @@ async def tweet_oembed(  # ruff: ignore[unused-async]
     # Your site URL or the original post URL.
     provider_url: str = "https://e.lovinator.space"
 
-    # Not visibly rendered.
-    # Required field, set to "Embed".
-    title: str = "Embed"
-
     # type is required and must be "rich" for Discord to render the embed.
     # version is required and must be "1.0" for Discord to render the embed.
     payload: dict[str, str] = {
@@ -562,7 +535,7 @@ async def tweet_oembed(  # ruff: ignore[unused-async]
         "author_url": author_url,
         "provider_name": provider_name,
         "provider_url": provider_url,
-        "title": title,
+        "title": "Embed",
     }
 
     return Response(
