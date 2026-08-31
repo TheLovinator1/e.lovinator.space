@@ -225,14 +225,17 @@ def get_tweet_data(tweet_id: str, json_data: dict[str, Any], user_id: str) -> di
     twitter_download_path: Path = DATA_DIR / "Twitter" / "Downloads" / f"{user_id}"
     twitter_download_path.mkdir(parents=True, exist_ok=True)
 
-    if not (twitter_download_path / f"{tweet_id}.json").exists():
-        logger.info("Downloading tweet: %s", tweet_id)
-        (twitter_download_path / f"{tweet_id}.json").write_text(
-            json.dumps(json_data, ensure_ascii=False), encoding="utf-8"
-        )
-    else:
+    cache_file: Path = twitter_download_path / f"{tweet_id}.json"
+
+    if cache_file.exists():
         logger.info("Tweet already downloaded: %s", tweet_id)
-        json_data = json.loads((twitter_download_path / f"{tweet_id}.json").read_text(encoding="utf-8"))
+        try:
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            logger.warning("Cached tweet %s was corrupted, re-downloading", tweet_id)
+
+    logger.info("Downloading tweet: %s", tweet_id)
+    cache_file.write_text(json.dumps(json_data, ensure_ascii=False), encoding="utf-8")
     return json_data
 
 
