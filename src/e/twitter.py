@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from datetime import UTC
 from datetime import datetime
-from functools import cache
 from ipaddress import IPv4Address
 from ipaddress import IPv6Address
 from typing import TYPE_CHECKING
@@ -83,7 +82,7 @@ def get_emoji_poop(tweet_id: str, *, html: bool = True) -> str:
 
     tweet_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
     status: dict[str, Any] = tweet_data.get("status") or {}
-    
+
     bookmarks: int = safe_int(status.get("bookmarks"))
     likes: int = safe_int(status.get("likes"))
     replies: int = safe_int(status.get("replies"))
@@ -138,8 +137,6 @@ async def is_discord_client(client_ip: IPv4Address | IPv6Address) -> bool:
     ips: DiscordIPs = await get_discord_ips()
     return any(isinstance(client_ip, IPv4Address) and client_ip in prefix.ipv4_prefix for prefix in ips.prefixes)
 
-
-@cache
 def get_tweet(tweet_id: str) -> dict[str, Any]:
     """Returns tweet from fxtwitter API."""
     api_url: str = f"https://api.fxtwitter.com/2/status/{tweet_id}?about_account=1&lang=en"
@@ -156,9 +153,7 @@ def get_tweet(tweet_id: str) -> dict[str, Any]:
     author: dict[str, Any] = json_data.get("author") or {}
     user_id: str = str(author.get("id") or "")
 
-    twitter_download_path: Path = DATA_DIR / "Twitter" / "Downloads" / f"{user_id}"
-    twitter_download_path.mkdir(parents=True, exist_ok=True)
-    (twitter_download_path / f"{tweet_id}.json").write_text(str(json_data), encoding="utf-8")
+    json_data = get_tweet_data(tweet_id, json_data, user_id)
 
     # If the tweet has a translation, replace the original text with the translated text
     status: dict[str, Any] = json_data.get("status") or {}
@@ -169,6 +164,19 @@ def get_tweet(tweet_id: str) -> dict[str, Any]:
             status["text"] = translated_text
             json_data["status"] = status
 
+    return json_data
+
+def get_tweet_data(tweet_id: str, json_data: dict[str, Any], user_id: str) -> dict[str, Any]:
+    """Returns tweet data from cache or downloads it if not cached."""
+    twitter_download_path: Path = DATA_DIR / "Twitter" / "Downloads" / f"{user_id}"
+    twitter_download_path.mkdir(parents=True, exist_ok=True)
+
+    if not (twitter_download_path / f"{tweet_id}.json").exists():
+        logger.info("Downloading tweet: %s", tweet_id)
+        (twitter_download_path / f"{tweet_id}.json").write_text(str(json_data), encoding="utf-8")
+    else:
+        logger.info("Tweet already downloaded: %s", tweet_id)
+        json_data = json.loads((twitter_download_path / f"{tweet_id}.json").read_text(encoding="utf-8"))
     return json_data
 
 
