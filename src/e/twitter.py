@@ -441,10 +441,16 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
 
     name: str = str(author.get("name") or "Unknown")
 
+    about_account: dict[str, Any] = author.get("about_account") or {}
+    based_in: str = str(about_account.get("based_in", "")).strip()
+    source: str = str(about_account.get("source", "")).strip()
+    footer: str = " · ".join(filter(None, (based_in, source))) or "e.lovinator.space"
+
     response = Template(
         template_name="tweet.html",
         context={
             "stats": stats,
+            "footer": footer,
             "name": name,
             "images": photos,
             "video": video,
