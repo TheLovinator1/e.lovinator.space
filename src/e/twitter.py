@@ -174,10 +174,8 @@ def convert_urls_to_links(text: str, facets: list[dict[str, Any]]) -> str:
         if escaped_replacement in anchors:
             continue
 
-        display: str = str(facet.get("display") or replacement)
-        href: str = html.escape(replacement, quote=True)
-        label: str = html.escape(display)
-        anchors[escaped_replacement] = f'<a href="{href}">{label}</a>'
+        label: str = html.escape(re.sub(r"^https?://", "", replacement), quote=True)
+        anchors[escaped_replacement] = f'<a href="{escaped_replacement}">{label}</a>'
 
     escaped_text: str = html.escape(text, quote=True)
 
