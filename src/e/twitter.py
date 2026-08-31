@@ -251,7 +251,7 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
 
 
 @get(path="/api/v1/statuses/{tweet_id:str}")
-async def tweet_status_api(  # ruff: ignore[unused-async]
+async def tweet_status_api(  # ruff: ignore[too-many-locals, unused-async]
     request: Request,
     tweet_id: Annotated[str, PathParameter()],
 ) -> Response:
@@ -324,7 +324,7 @@ async def tweet_status_api(  # ruff: ignore[unused-async]
                 "remote_url": None,
                 "preview_remote_url": None,
                 "text_url": None,
-                "description": "Alt text for accessibility",
+                "description": f"Photo by {username} on Twitter",
                 "meta": {
                     "original": {
                         "width": photo.get("width", 0),
@@ -367,7 +367,7 @@ async def tweet_status_api(  # ruff: ignore[unused-async]
                 "remote_url": None,
                 "preview_remote_url": None,
                 "text_url": None,
-                "description": "Alt text for accessibility",
+                "description": f"Photo by {username} on Twitter",
                 "meta": {
                     "original": {
                         "width": video.get("width", 0),
@@ -430,6 +430,7 @@ async def users_statuses(  # ruff: ignore[unused-async]
         "uri": url,
         "created_at": created_at,
         "content": content,
+        "visibility": "public",
         "account": {
             "id": author_id,
             "display_name": screen_name,
@@ -502,7 +503,7 @@ async def users_statuses(  # ruff: ignore[unused-async]
                 "remote_url": None,
                 "preview_remote_url": None,
                 "text_url": None,
-                "description": "Alt text for accessibility",
+                "description": f"Photo by {username} on Twitter",
                 "meta": {
                     "original": {
                         "width": video.get("width", 0),
