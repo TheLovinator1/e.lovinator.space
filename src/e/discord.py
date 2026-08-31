@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime  # ruff: ignore[typing-only-standard-library-import]
 from enum import StrEnum
 from ipaddress import IPv4Network  # ruff: ignore[typing-only-standard-library-import]
@@ -11,6 +12,9 @@ from pydantic import ConfigDict
 from pydantic import Field
 from wreq import Client
 from wreq import Emulation
+
+discord_ips_cache: DiscordIPs | None = None
+discord_ips_cache_time: float = 0.0
 
 
 class Service(StrEnum):
@@ -56,13 +60,26 @@ async def get_discord_ips() -> DiscordIPs:
     Returns:
         DiscordIPs: The IPs that Discord uses.
     """
+    global discord_ips_cache, discord_ips_cache_time  # ruff: ignore[global-statement]
+
+    now: float = time.monotonic()
+    if discord_ips_cache is not None and (now - discord_ips_cache_time) < 3600.0:  # ruff: ignore[magic-value-comparison]
+        return discord_ips_cache
+
     url = "https://cdn.discordapp.com/ipranges/discord.json"
 
     client = Client(emulation=Emulation.Chrome149)
-    resp: wreq.Response = await client.get(url)
-    data: str = await resp.text()
+    try:
+        resp: wreq.Response = await client.get(url)
+        data: str = await resp.text()
+        parsed_data: DiscordIPs = DiscordIPs.model_validate_json(data)
+    except Exception:
+        if discord_ips_cache is not None:
+            return discord_ips_cache
+        raise
 
-    parsed_data: DiscordIPs = DiscordIPs.model_validate_json(data)
+    discord_ips_cache = parsed_data
+    discord_ips_cache_time = now
     return parsed_data
 
 

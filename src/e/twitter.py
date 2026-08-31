@@ -7,6 +7,7 @@ from datetime import UTC
 from datetime import datetime
 from ipaddress import IPv4Address
 from ipaddress import IPv6Address
+from ipaddress import ip_address
 from typing import TYPE_CHECKING
 from typing import Annotated
 from typing import Any
@@ -122,6 +123,37 @@ def twitter_downloads_path(username: str) -> Path:
     return twitter_download_path
 
 
+def get_client_ip(request: Request) -> IPv4Address | IPv6Address | None:
+    """Extract client IP address from the request.
+
+    Checks X-Forwarded-For, X-Real-IP, CF-Connecting-IP, and request.client.host.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        An IPv4Address or IPv6Address if parsed successfully, otherwise None.
+    """
+    raw_ip: str | None = None
+
+    if xff := request.headers.get("x-forwarded-for"):
+        raw_ip = xff.split(",")[0].strip()
+    elif x_real_ip := request.headers.get("x-real-ip"):
+        raw_ip = x_real_ip.strip()
+    elif cf_ip := request.headers.get("cf-connecting-ip"):
+        raw_ip = cf_ip.strip()
+    elif request.client and request.client.host:
+        raw_ip = request.client.host.strip()
+
+    if not raw_ip:
+        return None
+
+    try:
+        return ip_address(raw_ip)
+    except ValueError:
+        return None
+
+
 async def is_discord_client(client_ip: IPv4Address | IPv6Address) -> bool:
     """Check whether a client IP belongs to Discord (or localhost).
 
@@ -134,7 +166,11 @@ async def is_discord_client(client_ip: IPv4Address | IPv6Address) -> bool:
     if client_ip.is_loopback:
         return True
 
-    ips: DiscordIPs = await get_discord_ips()
+    try:
+        ips: DiscordIPs = await get_discord_ips()
+    except Exception as e:  # ruff: ignore[blind-except]
+        logger.warning(f"Failed to fetch Discord IPs: {e}")
+        return False
 
     # Discord's IP range feed only ever publishes IPv4 prefixes, so IPv6 clients never match here.
     return any(isinstance(client_ip, IPv4Address) and client_ip in prefix.ipv4_prefix for prefix in ips.prefixes)
@@ -432,7 +468,7 @@ def build_mastodon_status(tweet_id: str, json_data: dict[str, Any]) -> dict[str,
 
 
 @get("/{username:str}/status/{tweet_id:str}")
-async def twitter(  # ruff: ignore[too-many-locals, unused-async]
+async def twitter(  # ruff: ignore[too-many-locals]
     request: Request,
     username: Annotated[str, PathParameter()],
     tweet_id: Annotated[str, PathParameter()],
@@ -443,6 +479,10 @@ async def twitter(  # ruff: ignore[too-many-locals, unused-async]
         A redirect to the tweet URL for non-Discord clients, or a rendered
         HTML page with Open Graph metadata for Discord clients.
     """
+    client_ip: IPv4Address | IPv6Address | None = get_client_ip(request)
+    if client_ip is None or not await is_discord_client(client_ip):
+        return Redirect(f"https://x.com/{username}/status/{tweet_id}", status_code=302)
+
     try:
         json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
     except niquests.HTTPError as e:

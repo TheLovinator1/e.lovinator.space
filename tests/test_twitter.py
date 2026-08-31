@@ -1,8 +1,22 @@
 from __future__ import annotations
 
+import asyncio
+from ipaddress import ip_address
+from typing import TYPE_CHECKING
 from typing import Any
 
+from litestar.testing import RequestFactory
+from litestar.testing import TestClient
+
+from e.main import app
 from e.twitter import convert_urls_to_links
+from e.twitter import get_client_ip
+from e.twitter import is_discord_client
+
+if TYPE_CHECKING:
+    from httpx import Response
+    from litestar import Litestar
+    from litestar import Request
 
 
 def make_facet(
@@ -142,3 +156,38 @@ def test_scheme_is_stripped_from_visible_label_but_kept_in_href() -> None:
 
     assert '<a href="http://example.com/path">example.com/path</a>' in result
     assert '<a href="https://example.org/other">example.org/other</a>' in result
+
+
+def test_get_client_ip_headers() -> None:
+    """Test extracting client IP from request headers."""
+    req_xff: Request[Any, Any, Any] = RequestFactory().get("/", headers={"x-forwarded-for": "8.8.8.8, 1.1.1.1"})
+    assert get_client_ip(req_xff) == ip_address("8.8.8.8")
+
+    req_real: Request[Any, Any, Any] = RequestFactory().get("/", headers={"x-real-ip": "1.1.1.1"})
+    assert get_client_ip(req_real) == ip_address("1.1.1.1")
+
+    req_cf: Request[Any, Any, Any] = RequestFactory().get("/", headers={"cf-connecting-ip": "9.9.9.9"})
+    assert get_client_ip(req_cf) == ip_address("9.9.9.9")
+
+    req_invalid: Request[Any, Any, Any] = RequestFactory().get("/", headers={"x-forwarded-for": "invalid-ip"})
+    assert get_client_ip(req_invalid) is None
+
+
+def test_is_discord_client() -> None:
+    """Test checking if an IP belongs to Discord or loopback."""
+    assert asyncio.run(is_discord_client(ip_address("127.0.0.1"))) is True
+    assert asyncio.run(is_discord_client(ip_address("::1"))) is True
+    assert asyncio.run(is_discord_client(ip_address("104.196.222.45"))) is True
+    assert asyncio.run(is_discord_client(ip_address("8.8.8.8"))) is False
+
+
+def test_non_discord_ip_redirects_to_tweet() -> None:
+    """Test non-Discord clients are redirected to the target tweet on x.com."""
+    client: TestClient[Litestar] = TestClient(app=app)
+    response: Response = client.get(
+        "/someuser/status/123456789",
+        headers={"x-forwarded-for": "8.8.8.8"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    assert response.headers.get("location") == "https://x.com/someuser/status/123456789"

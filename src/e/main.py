@@ -8,7 +8,7 @@ import uvicorn
 from gallery_dl import output
 from litestar import Litestar
 from litestar import get
-from litestar.contrib.jinja import JinjaTemplateEngine
+from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.response import Response
 from litestar.template import TemplateConfig
 
