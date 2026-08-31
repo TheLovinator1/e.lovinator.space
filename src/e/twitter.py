@@ -65,20 +65,54 @@ def safe_float(val: str | int | None, default: float = 0.0) -> float:
         return default
 
 
+def format_count(count: int) -> str:
+    """Returns K, M, B abbreviations for large numbers."""
+    if count >= 1_000_000_000:  # ruff: ignore[magic-value-comparison]
+        return f"{count / 1_000_000_000:.1f}B"
+    if count >= 1_000_000:  # ruff: ignore[magic-value-comparison]
+        return f"{count / 1_000_000:.1f}M"
+    if count >= 1_000:  # ruff: ignore[magic-value-comparison]
+        return f"{count / 1_000:.1f}K"
+
+    return str(count)
+
+
 def get_emoji_poop(tweet_id: str, *, html: bool = True) -> str:
     """Returns a string with emoji and engagement counts for a tweet."""
-    tweet_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
+    emoji_poop: str = ""
 
+    tweet_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
     status: dict[str, Any] = tweet_data.get("status") or {}
+    views: int = safe_int(status.get("views"))
     replies: int = safe_int(status.get("replies"))
     likes: int = safe_int(status.get("likes"))
     bookmarks: int = safe_int(status.get("bookmarks"))
     quotes: int = safe_int(status.get("quotes"))
 
     if not html:
-        return f"💬 {replies} 🔁 {quotes} ❤️ {likes} 🔖 {bookmarks}"
+        if views > 0:
+            emoji_poop += f"👁️ {format_count(views)} "
+        if replies > 0:
+            emoji_poop += f"💬 {format_count(replies)} "
+        if quotes > 0:
+            emoji_poop += f"🔁 {format_count(quotes)} "
+        if likes > 0:
+            emoji_poop += f"❤️ {format_count(likes)} "
+        if bookmarks > 0:
+            emoji_poop += f"🔖 {format_count(bookmarks)} "
+        return emoji_poop
 
-    return f"<b>💬 {replies}&ensp;🔁 {quotes}&ensp;❤️ {likes}&ensp;🔖 {bookmarks}</b>"
+    if views > 0:
+        emoji_poop += f"👁️ {format_count(views)}&ensp;"
+    if replies > 0:
+        emoji_poop += f"💬 {format_count(replies)}&ensp;"
+    if quotes > 0:
+        emoji_poop += f"🔁 {format_count(quotes)}&ensp;"
+    if likes > 0:
+        emoji_poop += f"❤️ {format_count(likes)}&ensp;"
+    if bookmarks > 0:
+        emoji_poop += f"🔖 {format_count(bookmarks)}&ensp;"
+    return f"<b>{emoji_poop}</b>"
 
 
 def twitter_downloads_path(username: str) -> Path:
