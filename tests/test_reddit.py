@@ -4,17 +4,18 @@ import json
 from typing import TYPE_CHECKING
 from typing import Any
 
+import pytest
 from gallery_dl import config
 from litestar.testing import TestClient
 
 from e.main import app
+from e.reddit import download_reddit_video
 from e.reddit import get_reddit_post
 from e.reddit import reddit_media
+from e.reddit import reddit_media_path
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def test_reddit_media_uses_hosted_gallery_images() -> None:
@@ -86,6 +87,97 @@ def test_reddit_media_uses_hosted_progressive_video() -> None:
     assert video is not None
     assert video["url"] == "https://v.redd.it/example/DASH_720.mp4"
     assert poster == "https://preview.redd.it/example.jpg"
+
+
+def test_download_reddit_video_returns_cached_file_without_downloading(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A cached video file is reused without invoking gallery-dl."""
+    monkeypatch.setattr("e.reddit.data_dir", lambda: tmp_path)
+    cached_file = tmp_path / "Reddit" / "Media" / "python" / "abc123.mp4"
+    cached_file.parent.mkdir(parents=True)
+    cached_file.write_bytes(b"cached video")
+
+    class DownloadJob:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            msg = "gallery-dl should not run when the file is already cached"
+            raise AssertionError(msg)
+
+    monkeypatch.setattr("e.reddit.job.DownloadJob", DownloadJob)
+
+    result = download_reddit_video("https://www.reddit.com/r/python/comments/abc123", "python", "abc123")
+
+    assert result == cached_file
+
+
+def test_download_reddit_video_downloads_and_muxes_with_gallery_dl(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A cache miss downloads and muxes the video via gallery-dl's DownloadJob."""
+    monkeypatch.setattr("e.reddit.data_dir", lambda: tmp_path)
+    output_path = reddit_media_path("python", "abc123")
+
+    class DownloadJob:
+        def __init__(self, url: str) -> None:
+            assert url == "https://www.reddit.com/r/python/comments/abc123"
+
+        def run(self) -> int:
+            output_path.write_bytes(b"muxed video")
+            return 0
+
+    monkeypatch.setattr("e.reddit.job.DownloadJob", DownloadJob)
+
+    result = download_reddit_video("https://www.reddit.com/r/python/comments/abc123", "python", "abc123")
+
+    assert result == output_path
+    assert result.read_bytes() == b"muxed video"
+
+
+def test_download_reddit_video_raises_when_gallery_dl_reports_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A non-zero DownloadJob status is treated as a failed download."""
+    monkeypatch.setattr("e.reddit.data_dir", lambda: tmp_path)
+
+    class DownloadJob:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def run(self) -> int:
+            return 1
+
+    monkeypatch.setattr("e.reddit.job.DownloadJob", DownloadJob)
+
+    try:
+        download_reddit_video("https://www.reddit.com/r/python/comments/abc123", "python", "abc123")
+    except RuntimeError:
+        pass
+    else:
+        pytest.fail("Expected a RuntimeError when gallery-dl reports a failed download")
+
+
+def test_reddit_video_file_serves_cached_video(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The video route serves a previously downloaded, muxed file."""
+    monkeypatch.setattr("e.reddit.data_dir", lambda: tmp_path)
+    video_path = tmp_path / "Reddit" / "Media" / "python" / "abc123.mp4"
+    video_path.parent.mkdir(parents=True)
+    video_path.write_bytes(b"muxed video")
+
+    with TestClient(app=app) as client:
+        response = client.get("/reddit/media/python/abc123/video.mp4")
+
+    assert response.status_code == 200
+    assert response.content == b"muxed video"
+
+
+def test_reddit_video_file_missing_returns_404(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The video route 404s when the file hasn't been downloaded yet."""
+    monkeypatch.setattr("e.reddit.data_dir", lambda: tmp_path)
+
+    with TestClient(app=app) as client:
+        response = client.get("/reddit/media/python/missing/video.mp4")
+
+    assert response.status_code == 404
 
 
 def test_non_discord_ip_redirects_to_reddit() -> None:
