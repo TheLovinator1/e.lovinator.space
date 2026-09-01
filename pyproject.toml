@@ -8,15 +8,12 @@ requires-python = ">=3.14"
 dependencies = [
     "anyio>=4.14.2",
     "gallery-dl[video]",
-    "htpy>=26.5.1",
     "litestar[standard]>=2.24.0",
     "loguru>=0.7.3",
     "niquests>=3.21.0",
-    "openai>=3.1.0",
     "platformdirs>=4.11.1",
     "pydantic>=2.13.4",
     "python-dotenv>=1.1.0",
-    "selectolax>=0.4.11",
     "uvicorn>=0.52.1",
     "wreq>=0.12.1",
 ]
@@ -33,7 +30,6 @@ e = "e.main:main"
 [build-system]
 requires = ["uv_build>=0.12.3,<0.13.0"]
 build-backend = "uv_build"
-
 
 [tool.ruff]
 fix = true

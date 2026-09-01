@@ -12,6 +12,7 @@ from litestar.plugins.jinja import JinjaTemplateEngine
 from litestar.response import Response
 from litestar.template import TemplateConfig
 
+from e.reddit import reddit
 from e.twitter import tweet_oembed
 from e.twitter import tweet_status_api
 from e.twitter import twitter
@@ -65,6 +66,7 @@ app = Litestar(
         tweet_status_api,
         twitter,
         users_statuses,
+        reddit,
     ],
     debug=True,
     template_config=TemplateConfig(

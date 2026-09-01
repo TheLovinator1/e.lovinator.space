@@ -61,14 +61,18 @@
         {% endif %}
         <link rel="icon" href="/favicon.ico">
         <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-        <!-- Triggers Mastodon embed renderer -->
-        <link rel="alternate"
-              type="application/activity+json"
-              href="{{ activity_url }}">
-        <!-- Controls author line + footer in Discord -->
-        <link rel="alternate"
-              type="application/json+oembed"
-              href="{{ oembed_url }}">
+        {% if activity_url %}
+            <!-- Triggers Mastodon embed renderer -->
+            <link rel="alternate"
+                  type="application/activity+json"
+                  href="{{ activity_url }}">
+        {% endif %}
+        {% if oembed_url %}
+            <!-- Controls author line + footer in Discord -->
+            <link rel="alternate"
+                  type="application/json+oembed"
+                  href="{{ oembed_url }}">
+        {% endif %}
         <title>{{ title }}</title>
     </head>
     <body>

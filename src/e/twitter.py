@@ -16,6 +16,7 @@ from typing import TypedDict
 from urllib.parse import urlparse
 
 import niquests
+from dotenv import load_dotenv
 from litestar import Request
 from litestar import get
 from litestar.params import PathParameter
@@ -23,13 +24,20 @@ from litestar.response import Redirect
 from litestar.response import Response
 from litestar.response import Template
 from loguru import logger
+from platformdirs import PlatformDirs
 
 from e.discord import DiscordIPs
 from e.discord import get_discord_ips
-from e.settings import DATA_DIR
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+load_dotenv()
+
+
+def data_dir() -> Path:
+    """Return the application data directory."""
+    return PlatformDirs(appauthor="TheLovinator", appname="e", ensure_exists=True, roaming=True).user_data_path
 
 
 def safe_int(val: str | int | None, default: int = 0) -> int:
@@ -118,7 +126,7 @@ def get_emoji_poop(status: dict[str, Any], *, html: bool = True) -> str:
 
 def twitter_downloads_path(username: str) -> Path:
     """Returns path where Tweets are stored."""
-    twitter_download_path: Path = DATA_DIR / "Twitter" / "Downloads" / f"{username}"
+    twitter_download_path: Path = data_dir() / "Twitter" / "Downloads" / f"{username}"
     twitter_download_path.mkdir(parents=True, exist_ok=True)
     return twitter_download_path
 
@@ -256,7 +264,7 @@ def get_tweet(tweet_id: str) -> dict[str, Any]:
 
 def get_tweet_data(tweet_id: str, json_data: dict[str, Any], user_id: str) -> dict[str, Any]:
     """Returns tweet data from cache or downloads it if not cached."""
-    twitter_download_path: Path = DATA_DIR / "Twitter" / "Downloads" / f"{user_id}"
+    twitter_download_path: Path = data_dir() / "Twitter" / "Downloads" / f"{user_id}"
     twitter_download_path.mkdir(parents=True, exist_ok=True)
 
     cache_file: Path = twitter_download_path / f"{tweet_id}.json"
