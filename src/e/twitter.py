@@ -13,6 +13,7 @@ from typing import Annotated
 from typing import Any
 from typing import Literal
 from typing import TypedDict
+from urllib.parse import quote
 from urllib.parse import urlparse
 
 import niquests
@@ -185,7 +186,7 @@ async def is_discord_client(client_ip: IPv4Address | IPv6Address) -> bool:
 
 
 def convert_urls_to_links(text: str, facets: list[dict[str, Any]]) -> str:
-    """For each URL in the tweet text, replace it with an HTML anchor tag linking to the resolved URL.
+    """Replace URL and hashtag facets in tweet text with HTML anchors.
 
     Matches by substring rather than facet indices: indices are only valid against
     ``raw_text.text``, but ``text`` here may instead be a translated replacement whose
@@ -203,7 +204,22 @@ def convert_urls_to_links(text: str, facets: list[dict[str, Any]]) -> str:
     """
     anchors: dict[str, str] = {}
     for facet in facets:
-        if facet.get("type") != "url":
+        facet_type: str = str(facet.get("type") or "")
+
+        if facet_type == "hashtag":
+            hashtag: str = str(facet.get("original") or "")
+            if not hashtag:
+                continue
+
+            escaped_hashtag: str = html.escape(f"#{hashtag}", quote=True)
+            if escaped_hashtag in anchors:
+                continue
+
+            hashtag_url: str = f"https://x.com/hashtag/{quote(hashtag, safe='')}"
+            anchors[escaped_hashtag] = f'<a href="{hashtag_url}">{escaped_hashtag}</a>'
+            continue
+
+        if facet_type != "url":
             continue
 
         replacement: str = str(facet.get("replacement") or "")

@@ -41,6 +41,24 @@ def test_single_url_is_wrapped_in_anchor() -> None:
     assert result.count("<a ") == 1
 
 
+def test_hashtag_is_wrapped_in_anchor() -> None:
+    text = "Follow #Python for updates"
+    facets: list[dict[str, Any]] = [{"type": "hashtag", "original": "Python"}]
+
+    result: str = convert_urls_to_links(text, facets)
+
+    assert '<a href="https://x.com/hashtag/Python">#Python</a>' in result
+
+
+def test_hashtag_is_url_encoded() -> None:
+    text = "A #C++ discussion"
+    facets: list[dict[str, Any]] = [{"type": "hashtag", "original": "C++"}]
+
+    result: str = convert_urls_to_links(text, facets)
+
+    assert '<a href="https://x.com/hashtag/C%2B%2B">#C++</a>' in result
+
+
 def test_multiple_urls_are_all_wrapped() -> None:
     text = "First https://a.example/one then https://b.example/two"
     facets: list[dict[str, Any]] = [
