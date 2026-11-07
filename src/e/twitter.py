@@ -344,6 +344,122 @@ class Video(TypedDict):
     """The content type of the video, e.g., "video/mp4"."""
 
 
+def _discord_component_embed_size(payload: dict[str, Any]) -> int:
+    """Return the HTML-safe, compact JSON payload size in UTF-8 bytes."""
+    serialized: str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    # Match the escaping performed by Jinja's ``tojson`` filter.
+    for char, escaped in (
+        ("&", r"\u0026"),
+        ("<", r"\u003c"),
+        (">", r"\u003e"),
+        ("'", r"\u0027"),
+    ):
+        serialized = serialized.replace(char, escaped)
+    return len(serialized.encode("utf-8"))
+
+
+def build_discord_component_embed(
+    *,
+    author_name: str,
+    text: str,
+    description: str,
+    username: str,
+    tweet_url: str,
+    images: list[Photo],
+    video: Video | None,
+) -> dict[str, Any]:
+    """Build a Discord Component Embed for an X post.
+
+    Uses a text section with an X link button and a media gallery. Video
+    media is represented as a gallery item so Discord can show a preview
+    frame with playback controls.
+
+    The payload is kept below Discord's 3,000-byte limit.
+    """
+    media_items: list[dict[str, Any]] = []
+
+    if video:
+        media_url: str = video["url"]
+        if urlparse(media_url).scheme in {"http", "https"} and len(media_url) <= 2048:
+            media_items.append({
+                "media": {"url": media_url},
+                "description": f"Video by @{username}"[:200],
+            })
+    else:
+        for index, photo in enumerate(images[:10], start=1):
+            media_url = photo["url"]
+            if urlparse(media_url).scheme not in {"http", "https"} or len(media_url) > 2048:
+                continue
+
+            media_items.append({
+                "media": {"url": media_url},
+                "description": f"Photo {index} of {len(images)} by @{username}"[:200],
+            })
+
+    heading: str = author_name[:200]
+    post_text: str = text[:1400]
+    engagement: str = description[:250]
+
+    def make_payload() -> dict[str, Any]:
+        profile_url: str = f"https://x.com/{quote(username, safe='')}"
+        content_parts: list[str] = [
+            f"## [{heading} (@{username})]({profile_url})",
+        ]
+        if post_text:
+            content_parts.append(post_text)
+        if engagement:
+            content_parts.append(engagement)
+        components: list[dict[str, Any]] = [
+            {
+                "type": 9,
+                "components": [
+                    {
+                        "type": 10,
+                        "content": "\n\n".join(content_parts),
+                    },
+                ],
+                "accessory": {
+                    "type": 2,
+                    "style": 5,
+                    "url": tweet_url,
+                    "label": "Open on X",
+                },
+            },
+        ]
+
+        if media_items:
+            components.append({
+                "type": 12,
+                "items": media_items,
+            })
+
+        return {
+            "component": {
+                "type": 17,
+                "accent_color": 0x26A7DE,
+                "components": components,
+            },
+        }
+
+    payload: dict[str, Any] = make_payload()
+
+    # Leave headroom for any JSON escaping differences between serializers.
+    while _discord_component_embed_size(payload) > 2800:
+        if media_items:
+            media_items.pop()
+        elif post_text:
+            post_text = post_text[: max(0, len(post_text) - 100)]
+        elif engagement:
+            engagement = engagement[: max(0, len(engagement) - 50)]
+        elif heading:
+            heading = heading[: max(0, len(heading) - 50)]
+        else:
+            break
+        payload = make_payload()
+
+    return payload
+
+
 def build_mastodon_status(tweet_id: str, json_data: dict[str, Any]) -> dict[str, Any]:  # ruff: ignore[too-many-locals]
     """Generates the bulletproof Mastodon Status JSON, ensuring no missing fields crash the parser.
 
@@ -581,12 +697,23 @@ async def twitter(  # ruff: ignore[too-many-locals]
     source: str = str(about_account.get("source", "")).strip()
     footer: str = " • ".join(filter(None, (based_in, source))) or "e.lovinator.space"
 
+    discord_component_embed: dict[str, Any] = build_discord_component_embed(
+        author_name=name,
+        text=text,
+        description=emoji_poop,
+        username=screen_name,
+        tweet_url=tweet_url,
+        images=photos,
+        video=video,
+    )
+
     response = Template(
         template_name="tweet.html",
         context={
             "stats": stats,
             "footer": footer,
             "name": name,
+            "avatar": str(author.get("avatar_url") or ""),
             "images": photos,
             "video": video,
             "poster": poster,
@@ -604,6 +731,7 @@ async def twitter(  # ruff: ignore[too-many-locals]
             "creator": f"@{screen_name}",
             "activity_url": f"https://e.lovinator.space/users/{screen_name}/statuses/{tweet_id}",
             "oembed_url": f"https://e.lovinator.space/_oembed/{screen_name}/{tweet_id}",
+            "discord_component_embed": discord_component_embed,
         },
     )
 

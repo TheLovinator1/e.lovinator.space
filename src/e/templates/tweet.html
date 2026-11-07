@@ -54,7 +54,7 @@
             {% endif %}
         {% endif %}
         {% if not images and not video and avatar %}
-            <!-- When there's no media, use the author's avatar as og:image and set twitter:image to "0": -->
+            <!-- When there's no media, use the author's avatar as og:image and set twitter:image to "0". -->
             <meta property="og:image" content="{{ avatar }}">
             <meta property="og:image:secure_url" content="{{ avatar }}">
             <meta name="twitter:image" content="0">
@@ -73,6 +73,8 @@
                   type="application/json+oembed"
                   href="{{ oembed_url }}">
         {% endif %}
+        <!-- Discord Component Embed; Open Graph metadata above remains the fallback. -->
+        <script id="discord:component-embed" type="application/json">{{ discord_component_embed | tojson }}</script>
         <title>{{ title }}</title>
     </head>
     <body>

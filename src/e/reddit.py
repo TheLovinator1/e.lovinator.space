@@ -46,7 +46,7 @@ def _hosted_url(url: object) -> str | None:
 
     normalized: str = html.unescape(url)
     hostname: str | None = urlsplit(normalized).hostname
-    if hostname and hostname.lower().endswith("redd.it"):
+    if hostname and (hostname.lower() == "redd.it" or hostname.lower().endswith(".redd.it")):
         return normalized
     return None
 
@@ -160,7 +160,8 @@ def reddit_media(post: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, 
     """
     preview: dict[str, Any] = post.get("preview") or {}
     preview_images: list[dict[str, Any]] = preview.get("images") or []
-    poster: str | None = _hosted_url((preview_images[0].get("source") or {}).get("url")) if preview_images else None
+    poster_source: dict[str, Any] = (preview_images[0].get("source") or {}) if preview_images else {}
+    poster: str | None = _hosted_url(poster_source.get("url"))
 
     reddit_video: dict[str, Any] = (post.get("secure_media") or {}).get("reddit_video") or {}
     if video_url := _hosted_url(reddit_video.get("fallback_url")):
@@ -182,21 +183,130 @@ def reddit_media(post: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, 
         media: dict[str, Any] = metadata.get(item.get("media_id")) or {}
         source: dict[str, Any] = media.get("s") or {}
         if image_url := _hosted_url(source.get("u")):
-            images.append({
+            image: dict[str, Any] = {
                 "url": image_url,
                 "width": int(source.get("x") or 1280),
                 "height": int(source.get("y") or 720),
-            })
+            }
+            if caption := item.get("caption"):
+                image["description"] = str(caption)
+            images.append(image)
 
     if not images and poster:
-        source = preview_images[0].get("source") or {}
         images.append({
             "url": poster,
-            "width": int(source.get("width") or 1280),
-            "height": int(source.get("height") or 720),
+            "width": int(poster_source.get("width") or 1280),
+            "height": int(poster_source.get("height") or 720),
         })
 
     return images, None, poster
+
+
+def _serialize_discord_component_embed(payload: dict[str, Any]) -> str:
+    """Serialize a component embed safely for an inline HTML script element."""
+    serialized: str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    # Escaping '<' prevents user-provided text from terminating the script element.
+    return (
+        serialized
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
+def build_discord_component_embed(
+    title: str,
+    description: str,
+    canonical_url: str,
+    images: list[dict[str, Any]],
+    video: dict[str, Any] | None,
+) -> str:
+    """Build a Discord Component Embed and return its HTML-safe JSON string.
+
+    The payload uses a text section, an optional link button, and an optional
+    media gallery. It is kept within Discord's 3,000-byte payload limit.
+    """
+    media_items: list[dict[str, Any]] = []
+
+    if video:
+        video_url: Any = video.get("url")
+        if isinstance(video_url, str) and video_url.startswith(("https://", "http://")) and len(video_url) <= 2048:
+            media_items.append({"media": {"url": video_url}})
+    else:
+        for image in images[:10]:
+            image_url: Any = image.get("url")
+            if (
+                not isinstance(image_url, str)
+                or not image_url.startswith(("https://", "http://"))
+                or len(image_url) > 2048
+            ):
+                continue
+
+            item: dict[str, Any] = {"media": {"url": image_url}}
+            if caption := image.get("description"):
+                item["description"] = str(caption)[:200]
+            media_items.append(item)
+
+    heading: str = title[:250]
+    body: str = description[:1200]
+
+    def make_payload() -> dict[str, Any]:
+        content: str = f"# {heading}" if heading else ""
+        if body:
+            content = f"{content}\n{body}" if content else body
+
+        components: list[dict[str, Any]] = [
+            {
+                "type": 9,
+                "components": [
+                    {
+                        "type": 10,
+                        "content": content,
+                    },
+                ],
+                "accessory": {
+                    "type": 2,
+                    "style": 5,
+                    "url": canonical_url,
+                    "label": "Open Reddit",
+                },
+            },
+        ]
+
+        if media_items:
+            components.append({
+                "type": 12,
+                "items": media_items,
+            })
+
+        return {
+            "component": {
+                "type": 17,
+                "accent_color": 0xFF4500,
+                "components": components,
+            },
+        }
+
+    payload: dict[str, Any] = make_payload()
+    serialized: str = _serialize_discord_component_embed(payload)
+
+    while len(serialized.encode("utf-8")) > 3000:
+        if media_items:
+            media_items.pop()
+        elif body:
+            body = body[: max(0, len(body) - 100)]
+        elif heading:
+            heading = heading[: max(0, len(heading) - 50)]
+        else:
+            # The remaining fixed payload is small enough for the 3,000-byte limit.
+            break
+
+        payload = make_payload()
+        serialized = _serialize_discord_component_embed(payload)
+
+    return serialized
 
 
 @get("/reddit/media/{subreddit:str}/{post_id:str}/video.mp4", sync_to_thread=True)
@@ -245,7 +355,7 @@ async def reddit(
     post_id: Annotated[str, PathParameter()],
     slug: Annotated[str, PathParameter()] = "",
 ) -> Template | Redirect:
-    """Serve an Open Graph Reddit embed to Discord clients.
+    """Serve a Discord Component Embed with Open Graph fallback for Reddit posts.
 
     Returns:
         A redirect for non-Discord clients or a rendered embed page.
@@ -265,7 +375,8 @@ async def reddit(
     video: dict[str, Any] | None
     poster: str | None
     images, video, poster = reddit_media(post)
-    if video and not video.pop("is_gif"):
+
+    if video and not video.pop("is_gif", False):
         video["url"] = await _resolve_video_url(request, video, subreddit, post_id)
 
     title: str = str(post.get("title") or "Reddit")
@@ -277,18 +388,30 @@ async def reddit(
     selftext: str = str(post.get("selftext") or "").strip()
     description: str = f"{summary}\n\n{selftext}" if selftext else summary
 
+    component_embed_json: str = build_discord_component_embed(
+        title=title,
+        description=description,
+        canonical_url=canonical_url,
+        images=images,
+        video=video,
+    )
+
+    og_image: dict[str, Any] | None = images[0] if images else ({"url": poster} if poster else None)
+
     response = Template(
         template_name="reddit.html",
         context={
             "images": images,
             "video": video,
             "poster": poster,
+            "og_image": og_image,
             "og_type": "video.other" if video else "article",
             "title": title,
             "description": description,
             "canonical_url": canonical_url,
             "author": author,
             "subreddit": post_subreddit,
+            "discord_component_embed_json": component_embed_json,
         },
     )
     response.headers["Cache-Control"] = "public, max-age=300"
