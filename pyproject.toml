@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Embeds for sites with bad or missing embeds, such as Reddit and Twitter."
 readme = "README.md"
 authors = [{ name = "Joakim Hellsén", email = "tlovinator@gmail.com" }]
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 dependencies = [
     "anyio>=4.14.2",
     "gallery-dl[video]",

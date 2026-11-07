@@ -20,7 +20,7 @@ jobs:
       - uses: astral-sh/setup-uv@v10.0.1
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.14"
+          python-version: "3.15"
       - run: uv run pytest --maxfail=1 --disable-warnings -q || true
 
   build:
