@@ -5,6 +5,8 @@
 .forgejo/
 
 # Python
+# Resolved fresh during the build; never copy a local lock into the image.
+uv.lock
 .venv/
 __pycache__/
 *.py[cod]
