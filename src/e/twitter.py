@@ -439,6 +439,60 @@ def select_video_rendition(video: dict[str, Any]) -> tuple[str, int, int]:
     return url, width, height
 
 
+def _format_size(num_bytes: float) -> str:
+    """Format a byte count as megabytes or gigabytes."""
+    if num_bytes >= 1024**3:
+        return f"{num_bytes / 1024**3:.1f} GB"
+    return f"{num_bytes / 1024**2:.0f} MB"
+
+
+def describe_video_quality(video: dict[str, Any], url: str, width: int, height: int) -> str:
+    """Describe how the embedded rendition compares to the original on X.
+
+    Args:
+        video: The original video object from the fxtwitter API.
+        url: The rendition URL that is embedded.
+        width: The embedded rendition's width.
+        height: The embedded rendition's height.
+
+    Returns:
+        A warning line for display under the tweet, or an empty string when the embed
+        already uses the original resolution.
+    """
+    source_width: int = safe_int(video.get("width"))
+    source_height: int = safe_int(video.get("height"))
+    if not source_width or not source_height:
+        return ""
+    if source_width <= width and source_height <= height:
+        return ""
+
+    duration: float = safe_float(video.get("duration"))
+    source_bitrate: int = 0
+    embedded_bitrate: int = 0
+    for fmt in video.get("formats") or []:
+        if not isinstance(fmt, dict) or str(fmt.get("container") or "").lower() != "mp4":
+            continue
+        bitrate: int = safe_int(fmt.get("bitrate"))
+        if fmt.get("url") == url:
+            embedded_bitrate = bitrate
+        source_bitrate = max(source_bitrate, bitrate)
+
+    source_size: float = duration * source_bitrate / 8 if duration > 0 and source_bitrate > 0 else 0.0
+
+    def size_suffix(size: float) -> str:
+        return f" ({_format_size(size)})" if size > 0 else ""
+
+    improvements: list[str] = []
+    pixel_ratio: float = (source_width * source_height) / (width * height)
+    if pixel_ratio > 1.0:
+        improvements.append(f"{pixel_ratio:.1f}× the pixels")
+    if source_bitrate > embedded_bitrate > 0:
+        improvements.append(f"{source_bitrate / embedded_bitrate:.1f}× the bitrate")
+
+    better: str = f" — {' and '.join(improvements)}" if improvements else ""
+    return f"⚠️ Higher quality on X: {source_width}×{source_height}{size_suffix(source_size)}{better}."
+
+
 def _discord_component_embed_size(payload: dict[str, Any]) -> int:
     """Return the HTML-safe, compact JSON payload size in UTF-8 bytes."""
     serialized: str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -462,6 +516,7 @@ def build_discord_component_embed(
     tweet_url: str,
     images: list[Photo],
     video: Video | None,
+    quality_note: str = "",
 ) -> dict[str, Any]:
     """Build a Discord Component Embed for an X post.
 
@@ -521,6 +576,10 @@ def build_discord_component_embed(
                 },
             },
         ]
+
+        if quality_note:
+            components.append({"type": 14})
+            components.append({"type": 10, "content": quality_note})
 
         if media_items:
             components.append({
@@ -741,10 +800,12 @@ async def twitter(  # ruff: ignore[too-many-locals]
     ]
 
     video: Video | None = None
+    quality_note: str = ""
     if videos := media.get("videos"):
         item: dict[str, Any] = videos[0]
         if item.get("url"):
             video_url, video_width, video_height = select_video_rendition(item)
+            quality_note = describe_video_quality(item, video_url, video_width, video_height)
 
             video = {
                 "id": str(item.get("id") or "0"),
@@ -783,6 +844,7 @@ async def twitter(  # ruff: ignore[too-many-locals]
         tweet_url=tweet_url,
         images=photos,
         video=video,
+        quality_note=quality_note,
     )
 
     response = Template(
@@ -794,6 +856,7 @@ async def twitter(  # ruff: ignore[too-many-locals]
             "avatar": str(author.get("avatar_url") or ""),
             "images": photos,
             "video": video,
+            "quality_note": quality_note,
             "poster": poster,
             "width": int(video["width"]) if video else 1280,
             "height": int(video["height"]) if video else 720,

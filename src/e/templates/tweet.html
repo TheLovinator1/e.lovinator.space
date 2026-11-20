@@ -88,6 +88,10 @@
                 <a href="{{ tweet_url }}">{{ tweet_url }}</a>
             </dd>
         </dl>
+        {% if quality_note %}
+            <hr>
+            <p style="white-space: pre-line">{{ quality_note }}</p>
+        {% endif %}
         {% for image in images %}
             <img src="{{ image.url }}"
                  alt="Tweet image {{ loop.index }} of {{ images|length }}"

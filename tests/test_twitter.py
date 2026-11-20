@@ -9,7 +9,9 @@ from litestar.testing import RequestFactory
 from litestar.testing import TestClient
 
 from e.main import app
+from e.twitter import build_discord_component_embed
 from e.twitter import convert_urls_to_links
+from e.twitter import describe_video_quality
 from e.twitter import get_client_ip
 from e.twitter import is_discord_client
 from e.twitter import select_video_rendition
@@ -262,6 +264,57 @@ def test_video_larger_than_budget_uses_smallest_rendition() -> None:
 
     assert url.endswith("/480x270/low.mp4?tag=29")
     assert (width, height) == (480, 270)
+
+
+def test_quality_note_compares_rendition_to_original() -> None:
+    """The warning should state both resolutions and how much better the original is."""
+    note = describe_video_quality(
+        make_video(),
+        "https://video.twimg.com/amplify_video/1/vid/avc1/1280x720/hd.mp4?tag=29",
+        1280,
+        720,
+    )
+
+    assert note.startswith("⚠️ Higher quality on X: 3840×2160")
+    assert "1.1 GB" in note
+    assert "9.0× the pixels" in note
+    assert "11.5× the bitrate" in note
+
+
+def test_quality_note_is_omitted_for_original_rendition() -> None:
+    """No warning is needed when the embed already uses the source resolution."""
+    video = make_video(width=1280, height=720)
+    note = describe_video_quality(
+        video,
+        "https://video.twimg.com/amplify_video/1/vid/avc1/1280x720/hd.mp4?tag=29",
+        1280,
+        720,
+    )
+
+    assert note == ""
+
+
+def test_component_embed_renders_separator_and_quality_warning() -> None:
+    """The warning is added below the tweet, after a separator."""
+    payload = build_discord_component_embed(
+        author_name="Dee Batch",
+        text="Played GTA VI",
+        description="👁️ 1K",
+        username="Dee_Batch",
+        tweet_url="https://x.com/Dee_Batch/status/1",
+        images=[],
+        video=make_video(),
+        quality_note="⚠️ Higher quality on X",
+    )
+
+    components = payload["component"]["components"]
+    separator_index = next(index for index, component in enumerate(components) if component.get("type") == 14)
+    warning_index = next(
+        index
+        for index, component in enumerate(components)
+        if component.get("type") == 10 and "Higher quality on X" in component.get("content", "")
+    )
+    assert separator_index < warning_index
 
 
 def test_get_client_ip_headers() -> None:
