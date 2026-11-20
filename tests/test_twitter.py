@@ -12,6 +12,7 @@ from e.main import app
 from e.twitter import convert_urls_to_links
 from e.twitter import get_client_ip
 from e.twitter import is_discord_client
+from e.twitter import select_video_rendition
 
 if TYPE_CHECKING:
     from httpx import Response
@@ -174,6 +175,93 @@ def test_scheme_is_stripped_from_visible_label_but_kept_in_href() -> None:
 
     assert '<a href="http://example.com/path">example.com/path</a>' in result
     assert '<a href="https://example.org/other">example.org/other</a>' in result
+
+
+def make_video(**overrides: Any) -> dict[str, Any]:
+    """Return an fxtwitter-style video object for the 4K GTA VI tweet."""
+    video: dict[str, Any] = {
+        "id": "1",
+        "url": "https://video.twimg.com/amplify_video/1/vid/avc1/3840x2160/4k.mp4?tag=29",
+        "thumbnail_url": "https://pbs.twimg.com/thumb.jpg",
+        "duration": 363.366,
+        "width": 3840,
+        "height": 2160,
+        "format": "video/mp4",
+        "formats": [
+            {"url": "https://video.twimg.com/amplify_video/1/pl/playlist.m3u8?tag=29", "container": "m3u8"},
+            {
+                "url": "https://video.twimg.com/amplify_video/1/vid/avc1/480x270/low.mp4?tag=29",
+                "bitrate": 256000,
+                "container": "mp4",
+                "codec": "h264",
+            },
+            {
+                "url": "https://video.twimg.com/amplify_video/1/vid/avc1/640x360/mid.mp4?tag=29",
+                "bitrate": 832000,
+                "container": "mp4",
+                "codec": "h264",
+            },
+            {
+                "url": "https://video.twimg.com/amplify_video/1/vid/avc1/1280x720/hd.mp4?tag=29",
+                "bitrate": 2176000,
+                "container": "mp4",
+                "codec": "h264",
+            },
+            {
+                "url": "https://video.twimg.com/amplify_video/1/vid/avc1/1920x1080/fhd.mp4?tag=29",
+                "bitrate": 10368000,
+                "container": "mp4",
+                "codec": "h264",
+            },
+            {
+                "url": "https://video.twimg.com/amplify_video/1/vid/avc1/3840x2160/4k.mp4?tag=29",
+                "bitrate": 25128000,
+                "container": "mp4",
+                "codec": "h264",
+            },
+        ],
+    }
+    video.update(overrides)
+    return video
+
+
+def test_long_4k_video_uses_smaller_rendition() -> None:
+    """A 6-minute 4K video (1.1 GB) should fall back to 720p so Discord can embed it."""
+    url, width, height = select_video_rendition(make_video())
+
+    assert url.endswith("/1280x720/hd.mp4?tag=29")
+    assert (width, height) == (1280, 720)
+
+
+def test_short_4k_video_is_capped_at_1080p() -> None:
+    """4K is valid but wasteful; a short clip should still use 1080p, not 4K."""
+    url, width, height = select_video_rendition(make_video(duration=5))
+
+    assert url.endswith("/1920x1080/fhd.mp4?tag=29")
+    assert (width, height) == (1920, 1080)
+
+
+def test_video_without_formats_uses_top_level_url() -> None:
+    """Older API responses only have the top-level URL."""
+    video = {
+        "url": "https://video.twimg.com/amplify_video/1/vid/avc1/1280x720/only.mp4?tag=29",
+        "width": 1280,
+        "height": 720,
+        "duration": 10,
+    }
+
+    url, width, height = select_video_rendition(video)
+
+    assert url == video["url"]
+    assert (width, height) == (1280, 720)
+
+
+def test_video_larger_than_budget_uses_smallest_rendition() -> None:
+    """When every rendition is too big, pick the smallest instead of the 4K file."""
+    url, width, height = select_video_rendition(make_video(duration=36_000))
+
+    assert url.endswith("/480x270/low.mp4?tag=29")
+    assert (width, height) == (480, 270)
 
 
 def test_get_client_ip_headers() -> None:

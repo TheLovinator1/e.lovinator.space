@@ -344,6 +344,101 @@ class Video(TypedDict):
     """The content type of the video, e.g., "video/mp4"."""
 
 
+_MAX_EMBED_VIDEO_BYTES: int = 100 * 1024 * 1024
+"""Largest video Discord reliably embeds. Bigger files fall back to a plain preview."""
+
+_MAX_EMBED_VIDEO_DIMENSION: int = 1920
+"""Largest video dimension Discord reliably plays. 4K uploads work but waste bandwidth."""
+
+_VIDEO_DIMENSIONS_RE: re.Pattern[str] = re.compile(r"/(\d{2,5})x(\d{2,5})/")
+
+
+def _video_dimensions(url: str, default: tuple[int, int]) -> tuple[int, int]:
+    """Read ``<width>x<height>`` from a Twitter video URL.
+
+    Args:
+        url: A Twitter video URL such as ``.../vid/avc1/1280x720/clip.mp4``.
+        default: Dimensions to use when the URL does not contain them.
+
+    Returns:
+        The parsed width and height, or ``default``.
+    """
+    match: re.Match[str] | None = _VIDEO_DIMENSIONS_RE.search(url)
+    if match:
+        return int(match.group(1)), int(match.group(2))
+    return default
+
+
+def select_video_rendition(video: dict[str, Any]) -> tuple[str, int, int]:
+    """Pick a video rendition that Discord can fetch, measure, and embed.
+
+    fxtwitter's top-level ``url`` always points at the highest-quality MP4. For a long
+    4K video that file can be over a gigabyte, which Discord refuses to embed: it has to
+    measure the video within its 10 second link-preview budget, and large files fall back
+    to a plain thumbnail. The ``formats`` list exposes smaller MP4 renditions, so pick the
+    best one that still fits Discord's size budget.
+
+    Args:
+        video: A video object from the fxtwitter API.
+
+    Returns:
+        A ``(url, width, height)`` tuple. Falls back to the top-level URL when no usable
+        MP4 renditions are listed.
+    """
+    default_width: int = safe_int(video.get("width"), 1280)
+    default_height: int = safe_int(video.get("height"), 720)
+    default_url: str = str(video.get("url") or "")
+    duration: float = safe_float(video.get("duration"))
+
+    renditions: dict[str, tuple[str, int, int, float]] = {}
+    for fmt in video.get("formats") or []:
+        if not isinstance(fmt, dict):
+            continue
+
+        url: str = str(fmt.get("url") or "")
+        if urlparse(url).scheme not in {"http", "https"}:
+            continue
+        if str(fmt.get("container") or "").lower() != "mp4":
+            continue
+
+        width, height = _video_dimensions(url, (0, 0))
+        if not width or not height:
+            continue
+
+        bitrate: int = safe_int(fmt.get("bitrate"))
+        estimated_size: float = duration * bitrate / 8 if duration > 0 and bitrate > 0 else 0.0
+        renditions[url] = (url, width, height, estimated_size)
+
+    if not renditions:
+        width, height = _video_dimensions(default_url, (default_width, default_height))
+        return default_url, width, height
+
+    candidates: list[tuple[str, int, int, float]] = list(renditions.values())
+    known_sizes: list[tuple[str, int, int, float]] = [item for item in candidates if item[3] > 0]
+
+    # Prefer the highest resolution that fits, capping 4K renditions (they play fine but
+    # are usually too big for Discord to measure in time).
+    if known_sizes:
+        within_size_limit: list[tuple[str, int, int, float]] = [
+            item for item in known_sizes if item[3] <= _MAX_EMBED_VIDEO_BYTES
+        ]
+        if within_size_limit:
+            playable: list[tuple[str, int, int, float]] = [
+                item for item in within_size_limit if max(item[1], item[2]) <= _MAX_EMBED_VIDEO_DIMENSION
+            ]
+            pool: list[tuple[str, int, int, float]] = playable or within_size_limit
+            url, width, height, _ = max(pool, key=lambda item: item[1] * item[2])
+            return url, width, height
+
+        # Even the smallest rendition is over budget; send the least-bad one.
+        url, width, height, _ = min(known_sizes, key=lambda item: (item[3], item[1] * item[2]))
+        return url, width, height
+
+    playable = [item for item in candidates if max(item[1], item[2]) <= _MAX_EMBED_VIDEO_DIMENSION]
+    url, width, height, _ = max(playable or candidates, key=lambda item: item[1] * item[2])
+    return url, width, height
+
+
 def _discord_component_embed_size(payload: dict[str, Any]) -> int:
     """Return the HTML-safe, compact JSON payload size in UTF-8 bytes."""
     serialized: str = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -569,18 +664,7 @@ def build_mastodon_status(tweet_id: str, json_data: dict[str, Any]) -> dict[str,
     if json_videos := media.get("videos"):
         videos: list[dict] = json_videos
         for video in videos:
-            orig_w = safe_int(video.get("width"), 1280)
-            orig_h = safe_int(video.get("height"), 720)
-
-            mult = 1.0
-            if orig_w > 1920 or orig_h > 1920:  # ruff: ignore[magic-value-comparison]
-                mult = 0.5
-            if orig_w < 400 and orig_h < 400 and orig_w > 0:  # ruff: ignore[magic-value-comparison]
-                mult = 2.0
-
-            final_w = int(orig_w * mult)
-            final_h = int(orig_h * mult)
-            video_url = str(video.get("url") or "")
+            video_url, final_w, final_h = select_video_rendition(video)
             duration = safe_float(video.get("duration"))
             aspect = (final_w / final_h) if final_h > 0 else 0.0
 
@@ -660,21 +744,15 @@ async def twitter(  # ruff: ignore[too-many-locals]
     if videos := media.get("videos"):
         item: dict[str, Any] = videos[0]
         if item.get("url"):
-            orig_w = safe_int(item.get("width"), 1280)
-            orig_h = safe_int(item.get("height"), 720)
-            mult = 1.0
-            if orig_w > 1920 or orig_h > 1920:  # ruff: ignore[magic-value-comparison]
-                mult = 0.5
-            if orig_w < 400 and orig_h < 400 and orig_w > 0:  # ruff: ignore[magic-value-comparison]
-                mult = 2.0
+            video_url, video_width, video_height = select_video_rendition(item)
 
             video = {
                 "id": str(item.get("id") or "0"),
-                "url": str(item.get("url") or ""),
+                "url": video_url,
                 "preview_url": str(item.get("thumbnail_url") or ""),
                 "duration": safe_float(item.get("duration")),
-                "width": int(orig_w * mult),
-                "height": int(orig_h * mult),
+                "width": video_width,
+                "height": video_height,
                 "format": str(item.get("format") or ""),
                 "content_type": str(item.get("content_type") or "video/mp4"),
             }
