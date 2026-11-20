@@ -14,6 +14,7 @@ from litestar.template import TemplateConfig
 
 from e.reddit import reddit
 from e.reddit import reddit_video_file
+from e.reddit import subreddit
 from e.twitter import tweet_oembed
 from e.twitter import tweet_status_api
 from e.twitter import twitter
@@ -69,6 +70,7 @@ app = Litestar(
         users_statuses,
         reddit,
         reddit_video_file,
+        subreddit,
     ],
     debug=True,
     template_config=TemplateConfig(

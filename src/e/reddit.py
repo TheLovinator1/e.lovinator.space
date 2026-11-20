@@ -3,11 +3,17 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
+import time
+from datetime import UTC
+from datetime import datetime
 from typing import TYPE_CHECKING
 from typing import Annotated
 from typing import Any
+from urllib.parse import quote
 from urllib.parse import urlsplit
 
+import niquests
 from anyio import to_thread
 from dotenv import load_dotenv
 from gallery_dl import config
@@ -25,13 +31,21 @@ from platformdirs import PlatformDirs
 from e.twitter import format_count
 from e.twitter import get_client_ip
 from e.twitter import is_discord_client
+from e.twitter import safe_int
 
 if TYPE_CHECKING:
     from ipaddress import IPv4Address
     from ipaddress import IPv6Address
     from pathlib import Path
+    from urllib.parse import SplitResult
 
 load_dotenv()
+
+_REDDIT_CLIENT_ID = "yH0aTnJEt6qUgGn835B4vg"
+_REDDIT_USER_AGENT = "org.quantumbadger.redreader/1.25.1"
+_SUBREDDIT_NAME_RE: re.Pattern[str] = re.compile(r"[A-Za-z0-9_]{1,21}")
+_SUBREDDIT_CACHE_TTL: int = 300
+"""Subreddit stats go stale quickly, so refresh the cache after five minutes."""
 
 
 def data_dir() -> Path:
@@ -51,10 +65,22 @@ def _hosted_url(url: object) -> str | None:
     return None
 
 
+def _safe_https_url(url: object) -> str | None:
+    """Return an unescaped HTTPS URL, rejecting anything that cannot be embedded."""
+    if not isinstance(url, str) or not url:
+        return None
+
+    normalized: str = html.unescape(url)
+    parsed: SplitResult = urlsplit(normalized)
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        return None
+    return normalized
+
+
 def configure_extractor() -> None:
     """Configure gallery-dl's Reddit extractor to use the configured OAuth client."""
-    config.set(("extractor", "reddit"), key="client-id", value="yH0aTnJEt6qUgGn835B4vg")
-    config.set(("extractor", "reddit"), key="user-agent", value="org.quantumbadger.redreader/1.25.1")
+    config.set(("extractor", "reddit"), key="client-id", value=_REDDIT_CLIENT_ID)
+    config.set(("extractor", "reddit"), key="user-agent", value=_REDDIT_USER_AGENT)
     config.set(("extractor", "reddit"), key="refresh-token", value=os.getenv("REDDIT_REFRESH_TOKEN", ""))
 
 
@@ -83,6 +109,110 @@ def reddit_media_path(subreddit: str, post_id: str) -> Path:
     media_dir: Path = data_dir() / "Reddit" / "Media" / subreddit
     media_dir.mkdir(parents=True, exist_ok=True)
     return media_dir / f"{post_id}.mp4"
+
+
+def subreddit_cache_path(subreddit: str) -> Path:
+    """Return the path of a subreddit's cached about.json data."""
+    subreddit_dir: Path = data_dir() / "Reddit" / "Subreddits"
+    subreddit_dir.mkdir(parents=True, exist_ok=True)
+    return subreddit_dir / f"{subreddit}.json"
+
+
+def _reddit_access_token() -> str:
+    """Exchange the configured refresh token for a short-lived Reddit API token."""
+    refresh_token: str = os.getenv("REDDIT_REFRESH_TOKEN", "")
+    if not refresh_token:
+        msg = "REDDIT_REFRESH_TOKEN is not configured"
+        raise RuntimeError(msg)
+
+    response: niquests.Response = niquests.post(
+        "https://www.reddit.com/api/v1/access_token",
+        auth=(_REDDIT_CLIENT_ID, ""),
+        data={"grant_type": "refresh_token", "refresh_token": refresh_token},
+        headers={"User-Agent": _REDDIT_USER_AGENT},
+        timeout=15,
+    )
+    response.raise_for_status()
+    try:
+        token: str = str(response.json().get("access_token") or "")
+    except ValueError as exc:
+        msg = "Reddit returned invalid token JSON"
+        raise RuntimeError(msg) from exc
+    if not token:
+        msg = "Reddit returned an empty access token"
+        raise RuntimeError(msg)
+    return token
+
+
+def get_subreddit_about(subreddit: str) -> dict[str, Any]:
+    """Read cached subreddit stats or fetch them from Reddit's OAuth API.
+
+    Returns:
+        The ``data`` object from Reddit's subreddit about endpoint.
+
+    Raises:
+        RuntimeError: If Reddit cannot be reached or returns unusable data.
+        ValueError: If the subreddit name is invalid or the response has no data.
+    """
+    if not _SUBREDDIT_NAME_RE.fullmatch(subreddit):
+        msg = f"Invalid subreddit name: {subreddit}"
+        raise ValueError(msg)
+
+    cache_file: Path = subreddit_cache_path(subreddit)
+    if cache_file.exists():
+        try:
+            fresh: bool = time.time() - cache_file.stat().st_mtime < _SUBREDDIT_CACHE_TTL
+        except OSError:
+            fresh = False
+        if fresh:
+            logger.info("Subreddit already downloaded: {}", subreddit)
+            try:
+                cached: Any = json.loads(cache_file.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                logger.warning("Cached subreddit {} was corrupted, re-downloading", subreddit)
+            else:
+                if isinstance(cached, dict):
+                    return cached
+
+    token: str = _reddit_access_token()
+    logger.info("Downloading subreddit: {}", subreddit)
+    response: niquests.Response = niquests.get(
+        f"https://oauth.reddit.com/r/{subreddit}/about.json",
+        params={"raw_json": "1"},
+        headers={"Authorization": f"bearer {token}", "User-Agent": _REDDIT_USER_AGENT},
+        timeout=15,
+    )
+    response.raise_for_status()
+    try:
+        about: Any = response.json().get("data")
+    except ValueError as exc:
+        msg = f"Reddit returned invalid about JSON for {subreddit}"
+        raise RuntimeError(msg) from exc
+    if not isinstance(about, dict):
+        msg = f"Reddit returned no about data for {subreddit}"
+        raise ValueError(msg)
+
+    cache_file.write_text(json.dumps(about, ensure_ascii=False, default=str), encoding="utf-8")
+    return about
+
+
+def format_subreddit_stats(about: dict[str, Any]) -> str:
+    """Build a short, human-readable stats line for a subreddit."""
+    parts: list[str] = [f"👥 {format_count(safe_int(about.get('subscribers')))} members"]
+
+    if "active_user_count" in about:
+        parts.append(f"🟢 {format_count(safe_int(about.get('active_user_count')))} online")
+
+    created: str | None = None
+    if created_utc := safe_int(about.get("created_utc")):
+        try:
+            created = datetime.fromtimestamp(created_utc, UTC).strftime("%Y-%m-%d")
+        except (OSError, OverflowError, ValueError):
+            logger.debug("Ignoring invalid subreddit creation timestamp: {}", created_utc)
+    if created:
+        parts.append(f"📅 Created {created}")
+
+    return " • ".join(parts)
 
 
 def download_reddit_video(reddit_url: str, subreddit: str, post_id: str) -> Path:
@@ -341,6 +471,67 @@ async def _resolve_video_url(request: Request, video: dict[str, Any], subreddit:
         logger.warning("Failed to download Reddit video {}: {}", canonical_url, exc)
         return video["url"]
     return f"{str(request.base_url).rstrip('/')}/reddit/media/{subreddit}/{post_id}/video.mp4"
+
+
+@get(["/r/{subreddit:str}", "/r/{subreddit:str}/"])
+async def subreddit(
+    request: Request,
+    subreddit: Annotated[str, PathParameter()],
+) -> Template | Redirect:
+    """Serve a subreddit embed with stats for Discord, redirect everyone else to Reddit.
+
+    Returns:
+        A redirect to Reddit for non-Discord clients or when stats are unavailable,
+        otherwise a rendered embed page.
+    """
+    canonical_url: str = f"https://www.reddit.com/r/{quote(subreddit, safe='')}"
+    client_ip: IPv4Address | IPv6Address | None = get_client_ip(request)
+    if client_ip is None or not await is_discord_client(client_ip):
+        return Redirect(canonical_url, status_code=302)
+
+    try:
+        about: dict[str, Any] = await to_thread.run_sync(get_subreddit_about, subreddit)
+    except (RuntimeError, ValueError, niquests.RequestException) as exc:
+        logger.warning("Failed to fetch subreddit {} stats: {}", canonical_url, exc)
+        return Redirect(canonical_url, status_code=302)
+
+    display_name: str = str(about.get("display_name") or subreddit)
+    title: str = str(about.get("title") or f"r/{display_name}")
+    stats: str = format_subreddit_stats(about)
+    public_description: str = str(about.get("public_description") or "").strip()
+    description: str = f"r/{display_name} | {stats}"
+    if public_description:
+        description = f"{description}\n\n{public_description}"
+
+    images: list[dict[str, Any]] = []
+    for key in ("banner_img", "icon_img"):
+        if image_url := _safe_https_url(about.get(key)):
+            images.append({"url": image_url})
+
+    component_embed_json: str = build_discord_component_embed(
+        title=title,
+        description=description,
+        canonical_url=canonical_url,
+        images=images,
+        video=None,
+    )
+
+    response = Template(
+        template_name="reddit.html",
+        context={
+            "images": images,
+            "video": None,
+            "poster": None,
+            "og_image": images[0] if images else None,
+            "og_type": "website",
+            "title": title,
+            "description": description,
+            "canonical_url": canonical_url,
+            "discord_component_embed_json": component_embed_json,
+        },
+    )
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return response
 
 
 @get(

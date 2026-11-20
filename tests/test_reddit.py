@@ -11,6 +11,7 @@ from litestar.testing import TestClient
 from e.main import app
 from e.reddit import download_reddit_video
 from e.reddit import get_reddit_post
+from e.reddit import get_subreddit_about
 from e.reddit import reddit_media
 from e.reddit import reddit_media_path
 
@@ -220,3 +221,145 @@ def test_reddit_embed_omits_twitter_alternate_links(monkeypatch: pytest.MonkeyPa
     assert "u/someone in r/python | 10.9K upvotes | 165 comments" in response.text
     assert 'content="https://v.redd.it/example/CMAF_720.mp4"' in response.text
     assert 'content="https://external-preview.redd.it/example.jpg"' in response.text
+
+
+@pytest.mark.parametrize("path", ["/r/genshinsmols", "/r/genshinsmols/"])
+def test_subreddit_route_redirects_browsers_to_reddit(path: str) -> None:
+    """Subreddit URLs no longer 404 for ordinary clients."""
+    with TestClient(app=app) as client:
+        response = client.get(path, headers={"x-forwarded-for": "8.8.8.8"}, follow_redirects=False)
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://www.reddit.com/r/genshinsmols"
+
+
+def test_subreddit_embed_shows_stats(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Discord gets an embed with member counts and the subreddit description."""
+    about: dict[str, Any] = {
+        "display_name": "genshinsmols",
+        "display_name_prefixed": "r/genshinsmols",
+        "title": "Genshin Smols",
+        "public_description": "Cute Genshin art",
+        "subscribers": 12_345,
+        "active_user_count": 678,
+        "created_utc": 1_600_000_000,
+        "icon_img": "https://styles.redditmedia.com/icon.png?x=1&amp;y=2",
+        "banner_img": "https://b.thumbs.redditmedia.com/banner.jpg",
+    }
+    monkeypatch.setattr("e.reddit.get_subreddit_about", lambda *_: about)
+
+    with TestClient(app=app) as client:
+        response = client.get("/r/genshinsmols/", headers={"x-forwarded-for": "127.0.0.1"})
+
+    assert response.status_code == 200
+    assert '<meta property="og:type" content="website">' in response.text
+    assert "12.3K members" in response.text
+    assert "678 online" in response.text
+    assert "Created 2020-09-13" in response.text
+    assert "Cute Genshin art" in response.text
+    assert "https://b.thumbs.redditmedia.com/banner.jpg" in response.text
+    assert "https://styles.redditmedia.com/icon.png?x=1\\u0026y=2" in response.text
+
+
+def test_subreddit_embed_redirects_when_stats_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Missing OAuth credentials or API errors fall back to Reddit."""
+
+    def fail(*_args: object) -> None:
+        msg = "REDDIT_REFRESH_TOKEN is not configured"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr("e.reddit.get_subreddit_about", fail)
+
+    with TestClient(app=app) as client:
+        response = client.get(
+            "/r/genshinsmols",
+            headers={"x-forwarded-for": "127.0.0.1"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://www.reddit.com/r/genshinsmols"
+
+
+def test_get_subreddit_about_uses_oauth_and_caches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Subreddit stats are fetched via OAuth once and then read from cache."""
+    about: dict[str, Any] = {"display_name": "python", "subscribers": 42}
+    calls: dict[str, tuple[str, dict[str, Any]]] = {}
+
+    class TokenResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, str]:
+            return {"access_token": "token"}
+
+    class AboutResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, Any]:
+            return {"data": about}
+
+    def fake_post(url: str, **kwargs: Any) -> TokenResponse:
+        calls["post"] = (url, kwargs)
+        return TokenResponse()
+
+    def fake_get(url: str, **kwargs: Any) -> AboutResponse:
+        calls["get"] = (url, kwargs)
+        return AboutResponse()
+
+    monkeypatch.setattr("e.reddit.data_dir", lambda: tmp_path)
+    monkeypatch.setenv("REDDIT_REFRESH_TOKEN", "refresh")
+    monkeypatch.setattr("e.reddit.niquests.post", fake_post)
+    monkeypatch.setattr("e.reddit.niquests.get", fake_get)
+
+    assert get_subreddit_about("python") == about
+    assert calls["post"][1]["data"]["refresh_token"] == "refresh"
+    assert calls["get"][0] == "https://oauth.reddit.com/r/python/about.json"
+    assert calls["get"][1]["headers"]["Authorization"] == "bearer token"
+
+    cache_file = tmp_path / "Reddit" / "Subreddits" / "python.json"
+    assert json.loads(cache_file.read_text(encoding="utf-8")) == about
+
+    calls.clear()
+    assert get_subreddit_about("python") == about
+    assert calls == {}
+
+
+def test_get_subreddit_about_refreshes_expired_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Stale subreddit stats are re-fetched instead of being shown forever."""
+    cache_file = tmp_path / "Reddit" / "Subreddits" / "python.json"
+    cache_file.parent.mkdir(parents=True)
+    cache_file.write_text('{"subscribers": 1}', encoding="utf-8")
+    cache_mtime: float = cache_file.stat().st_mtime
+    monkeypatch.setattr("e.reddit.time.time", lambda: cache_mtime + 400)
+
+    class TokenResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, str]:
+            return {"access_token": "token"}
+
+    class AboutResponse:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, Any]:
+            return {"data": {"subscribers": 2}}
+
+    monkeypatch.setattr("e.reddit.data_dir", lambda: tmp_path)
+    monkeypatch.setenv("REDDIT_REFRESH_TOKEN", "refresh")
+    monkeypatch.setattr("e.reddit.niquests.post", lambda *_args, **_kwargs: TokenResponse())
+    monkeypatch.setattr("e.reddit.niquests.get", lambda *_args, **_kwargs: AboutResponse())
+
+    assert get_subreddit_about("python") == {"subscribers": 2}
+    assert json.loads(cache_file.read_text(encoding="utf-8")) == {"subscribers": 2}
+
+
+def test_get_subreddit_about_rejects_invalid_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Invalid subreddit names never reach the Reddit API or cache path."""
+    monkeypatch.setattr("e.reddit.data_dir", lambda: tmp_path)
+
+    with pytest.raises(ValueError, match="Invalid subreddit"):
+        get_subreddit_about("../etc")
