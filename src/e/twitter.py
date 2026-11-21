@@ -15,6 +15,7 @@ from typing import Literal
 from typing import TypedDict
 from urllib.parse import quote
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import niquests
 from dotenv import load_dotenv
@@ -588,6 +589,34 @@ def describe_video_quality(video: dict[str, Any], url: str, width: int, height: 
 _COMPONENT_EMBED_SAFE_BYTES: int = 2800
 """Payload target that leaves headroom below Discord's 3,000-byte limit."""
 
+_EMBED_TIMEZONE: ZoneInfo = ZoneInfo("Europe/Stockholm")
+"""CET/CEST timezone used for the footer timestamp."""
+
+
+def build_embed_footer(about_account: dict[str, Any], created_timestamp: int = 0) -> str:
+    """Build the footer text for an embed.
+
+    Discord appends its own localized timestamp to Open Graph footers, so pass
+    ``created_timestamp`` only for Component Embeds, which have no footer field.
+
+    Args:
+        about_account: The ``about_account`` object from the API response.
+        created_timestamp: The tweet's creation time as a Unix timestamp, or 0
+            to omit the timestamp.
+
+    Returns:
+        The footer text, e.g. ``Japan • Japan App Store • 22/10/2026, 23:54``.
+    """
+    based_in: str = str(about_account.get("based_in", "")).strip()
+    source: str = str(about_account.get("source", "")).strip()
+    parts: list[str] = [part for part in (based_in, source) if part] or ["e.lovinator.space"]
+
+    if created_timestamp > 0:
+        local_time: datetime = datetime.fromtimestamp(created_timestamp, _EMBED_TIMEZONE)
+        parts.append(local_time.strftime("%d/%m/%Y, %H:%M"))
+
+    return " • ".join(parts)
+
 
 def _discord_component_embed_size(payload: dict[str, Any]) -> int:
     """Return the HTML-safe, compact JSON payload size in UTF-8 bytes."""
@@ -613,12 +642,14 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
     video: Video | None,
     quality_note: str = "",
     json_url: str = "",
+    footer: str = "",
 ) -> dict[str, Any]:
     """Build a Discord Component Embed for an X post.
 
     Uses a text display, an optional action row with a JSON button,
     and a media gallery. Video media is represented as a gallery item so Discord
-    can show a preview frame with playback controls.
+    can show a preview frame with playback controls. An optional footer text
+    display is appended last.
 
     The payload is kept below Discord's 3,000-byte limit.
 
@@ -684,6 +715,12 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
             components.append({
                 "type": 12,
                 "items": media_items,
+            })
+
+        if footer:
+            components.append({
+                "type": 10,
+                "content": footer,
             })
 
         return {
@@ -932,9 +969,9 @@ async def twitter(  # ruff: ignore[too-many-locals]
     name: str = str(author.get("name") or "Unknown")
 
     about_account: dict[str, Any] = author.get("about_account") or {}
-    based_in: str = str(about_account.get("based_in", "")).strip()
-    source: str = str(about_account.get("source", "")).strip()
-    footer: str = " • ".join(filter(None, (based_in, source))) or "e.lovinator.space"
+    # The OG fallback keeps the old footer; Discord adds its own timestamp there.
+    footer: str = build_embed_footer(about_account)
+    component_footer: str = build_embed_footer(about_account, safe_int(status.get("created_timestamp")))
 
     discord_component_embed: dict[str, Any] = build_discord_component_embed(
         author_name=name,
@@ -945,6 +982,7 @@ async def twitter(  # ruff: ignore[too-many-locals]
         video=video,
         quality_note=quality_note,
         json_url=json_url,
+        footer=component_footer,
     )
 
     response = Template(

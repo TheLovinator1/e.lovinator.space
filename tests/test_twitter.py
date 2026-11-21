@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from datetime import UTC
+from datetime import datetime
 from ipaddress import ip_address
 from typing import TYPE_CHECKING
 from typing import Any
@@ -13,6 +16,7 @@ from litestar.testing import TestClient
 from e import twitter as twitter_module
 from e.main import app
 from e.twitter import build_discord_component_embed
+from e.twitter import build_embed_footer
 from e.twitter import convert_urls_to_links
 from e.twitter import describe_video_quality
 from e.twitter import get_client_ip
@@ -319,6 +323,93 @@ def test_component_embed_renders_separator_and_quality_warning() -> None:
         if component.get("type") == 10 and "Higher quality on X" in component.get("content", "")
     )
     assert separator_index < warning_index
+
+
+def test_embed_footer_uses_cest_in_summer() -> None:
+    """A summer tweet is rendered in CEST (UTC+2)."""
+    created_timestamp: int = int(datetime(2026, 10, 22, 21, 54, tzinfo=UTC).timestamp())
+
+    footer: str = build_embed_footer(
+        {"based_in": "Japan", "source": "Japan App Store"},
+        created_timestamp,
+    )
+
+    assert footer == "Japan • Japan App Store • 22/10/2026, 23:54"
+
+
+def test_embed_footer_uses_cet_in_winter() -> None:
+    """A winter tweet is rendered in CET (UTC+1)."""
+    created_timestamp: int = int(datetime(2026, 1, 5, 22, 15, tzinfo=UTC).timestamp())
+
+    footer: str = build_embed_footer(
+        {"based_in": "Japan", "source": "Japan App Store"},
+        created_timestamp,
+    )
+
+    assert footer == "Japan • Japan App Store • 05/01/2026, 23:15"
+
+
+def test_embed_footer_without_timestamp_keeps_og_format() -> None:
+    """The OG footer is unchanged: Discord appends the timestamp itself there."""
+    assert build_embed_footer({"based_in": "Japan", "source": "Japan App Store"}) == "Japan • Japan App Store"
+
+
+def test_embed_footer_falls_back_to_site_name_without_about_account() -> None:
+    """Without location or source, the footer keeps the old site-name fallback."""
+    assert build_embed_footer({}, 0) == "e.lovinator.space"
+
+
+def test_component_embed_has_footer_as_last_text_display() -> None:
+    """The footer is a text component at the bottom of the Component Embed."""
+    footer: str = "Japan • Japan App Store • 22/10/2026, 23:54"
+    payload: dict[str, Any] = build_discord_component_embed(
+        author_name="Some User",
+        text="hello",
+        description="",
+        username="someuser",
+        images=[],
+        video=None,
+        footer=footer,
+    )
+
+    components: list[dict[str, Any]] = payload["component"]["components"]
+    assert components[-1] == {"type": 10, "content": footer}
+
+
+def test_tweet_page_renders_footer_in_og_and_component(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The OG footer stays unchanged while the Component Embed adds the tweet date."""
+    monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
+    created_timestamp: int = int(datetime(2026, 10, 22, 21, 54, tzinfo=UTC).timestamp())
+    cache_file: Path = twitter_module.tweet_cache_path("123")
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(
+        json.dumps({
+            "status": {"id": "123", "text": "hello", "created_timestamp": created_timestamp},
+            "author": {
+                "id": "1",
+                "name": "Some User",
+                "screen_name": "someuser",
+                "about_account": {"based_in": "Japan", "source": "Japan App Store"},
+            },
+        }),
+        encoding="utf-8",
+    )
+    client: TestClient[Litestar] = TestClient(app=app)
+
+    response: Response = client.get("/someuser/status/123", headers={"x-forwarded-for": "127.0.0.1"})
+
+    assert response.status_code == 200
+    assert 'og:site_name" content="Japan • Japan App Store"' in response.text
+
+    script: re.Match[str] | None = re.search(
+        r'<script id="discord:component-embed" type="application/json">(.*?)</script>',
+        response.text,
+        re.DOTALL,
+    )
+    assert script is not None
+    payload: dict[str, Any] = json.loads(script.group(1))
+    footer: str = "Japan • Japan App Store • 22/10/2026, 23:54"
+    assert any(component.get("content") == footer for component in payload["component"]["components"])
 
 
 def test_get_client_ip_headers() -> None:
