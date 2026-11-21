@@ -679,8 +679,10 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
 
     def make_payload() -> dict[str, Any]:
         profile_url: str = f"https://x.com/{quote(username, safe='')}"
+        # Emoji are not allowed in Discord's masked-link labels, so only the
+        # handle is linked. The display name (which may contain emoji) stays plain.
         content_parts: list[str] = [
-            f"## [{heading} (@{username})]({profile_url})",
+            f"## {heading} [@{username}]({profile_url})",
         ]
         if post_text:
             content_parts.append(post_text)

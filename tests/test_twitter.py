@@ -325,6 +325,21 @@ def test_component_embed_renders_separator_and_quality_warning() -> None:
     assert separator_index < warning_index
 
 
+def test_component_embed_keeps_emoji_out_of_link_label() -> None:
+    """Discord rejects emoji in masked links, so only the handle is linked."""
+    payload: dict[str, Any] = build_discord_component_embed(
+        author_name="Elizabeth.R🥀MERCREW",
+        text="hello",
+        description="",
+        username="Elizabeth000425",
+        images=[],
+        video=None,
+    )
+
+    content: str = payload["component"]["components"][0]["content"]
+    assert content == ("## Elizabeth.R🥀MERCREW ([@Elizabeth000425](https://x.com/Elizabeth000425))\n\nhello")
+
+
 def test_embed_footer_uses_relative_discord_timestamp() -> None:
     """The tweet time becomes a Discord timestamp rendered in the viewer's locale."""
     created_timestamp: int = int(datetime(2026, 10, 22, 21, 54, tzinfo=UTC).timestamp())
