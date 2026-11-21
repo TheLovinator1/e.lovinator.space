@@ -663,8 +663,9 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
     Uses a text display, an optional action row with a JSON button,
     and a media gallery. Video media is represented as a gallery item so Discord
     can show a preview frame with playback controls. An optional footer text
-    display is appended last. The heading links to the tweet; display names
-    with emoji link the handle instead, since Discord bans emoji in link labels.
+    display is appended last. The whole ``Name (@handle)`` heading links to the
+    tweet; display names with emoji link only the handle, since Discord bans
+    emoji in link labels.
 
     The payload is kept below Discord's 3,000-byte limit.
 
@@ -702,7 +703,7 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
             # handle is linked when the display name contains one.
             heading_text: str = f"{heading} [@{username}]({post_url})"
         else:
-            heading_text = f"[{heading}]({post_url}) (@{username})"
+            heading_text = f"[{heading} (@{username})]({post_url})"
         content_parts: list[str] = [f"## {heading_text}"]
         if post_text:
             content_parts.append(post_text)

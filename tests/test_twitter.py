@@ -340,7 +340,7 @@ def test_component_embed_links_full_name_without_emoji() -> None:
     )
 
     content: str = payload["component"]["components"][0]["content"]
-    assert content == f"## [Some User]({tweet_url}) (@someuser)\n\nhello"
+    assert content == f"## [Some User (@someuser)]({tweet_url})\n\nhello"
 
 
 def test_component_embed_keeps_emoji_out_of_link_label() -> None:
@@ -439,7 +439,7 @@ def test_tweet_page_renders_footer_in_og_and_component(monkeypatch: pytest.Monke
     payload: dict[str, Any] = json.loads(script.group(1))
     footer: str = f"Japan • Japan App Store • <t:{created_timestamp}:R>"
     components: list[dict[str, Any]] = payload["component"]["components"]
-    assert components[0]["content"].startswith("## [Some User](https://x.com/someuser/status/123) (@someuser)")
+    assert components[0]["content"].startswith("## [Some User (@someuser)](https://x.com/someuser/status/123)")
     assert any(component.get("content") == footer for component in components)
 
 
