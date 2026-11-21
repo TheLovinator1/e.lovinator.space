@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from ipaddress import ip_address
 from typing import TYPE_CHECKING
 from typing import Any
 
+import pytest
 from litestar.testing import RequestFactory
 from litestar.testing import TestClient
 
+from e import twitter as twitter_module
 from e.main import app
 from e.twitter import build_discord_component_embed
 from e.twitter import convert_urls_to_links
@@ -17,6 +20,8 @@ from e.twitter import is_discord_client
 from e.twitter import select_video_rendition
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from httpx import Response
     from litestar import Litestar
     from litestar import Request
@@ -350,3 +355,176 @@ def test_non_discord_ip_redirects_to_tweet() -> None:
     )
     assert response.status_code == 302
     assert response.headers.get("location") == "https://x.com/someuser/status/123456789"
+
+
+def write_tweet_cache(tmp_path: Path, tweet_id: str, text: str) -> Path:
+    """Write a minimal fxtwitter-style cache file for tests.
+
+    Args:
+        tmp_path: Temporary directory provided by pytest.
+        tweet_id: The status ID to write cache data for.
+        text: The tweet text to store.
+
+    Returns:
+        The path of the cache file that was written.
+    """
+    cache_file: Path = twitter_module.tweet_cache_path(tweet_id)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(
+        json.dumps({
+            "status": {"id": tweet_id, "text": text},
+            "author": {"id": "1", "name": "Some User", "screen_name": "someuser"},
+        }),
+        encoding="utf-8",
+    )
+    return cache_file
+
+
+class FakeResponse:
+    """Minimal stand-in for a niquests response."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        """Store the payload that ``json()`` will return."""
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        """Pretend the request succeeded."""
+
+    def json(self) -> dict[str, Any]:
+        """Return the fabricated API payload."""
+        return self.payload
+
+
+def test_get_tweet_uses_cache_without_fetching(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A cached tweet should be read from disk without calling fxtwitter."""
+    monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
+    write_tweet_cache(tmp_path, "123", "cached text")
+
+    def unexpected_fetch(*args: object, **kwargs: object) -> None:
+        msg = "fxtwitter should not be called when the cache exists"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(twitter_module.niquests, "get", unexpected_fetch)
+
+    result = twitter_module.get_tweet("123")
+
+    assert result["status"]["text"] == "cached text"
+
+
+def test_get_tweet_translates_cached_text(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Translations must still be applied when the JSON comes from disk."""
+    monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
+    cache_file: Path = write_tweet_cache(tmp_path, "123", "original")
+    cached: dict[str, Any] = json.loads(cache_file.read_text(encoding="utf-8"))
+    cached["status"]["translation"] = {"text": "translated"}
+    cache_file.write_text(json.dumps(cached), encoding="utf-8")
+
+    result = twitter_module.get_tweet("123")
+
+    assert result["status"]["text"] == "translated"
+
+
+def test_force_refresh_fetches_and_overwrites_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Force refresh should replace the cached JSON with a fresh API response."""
+    monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
+    cache_file: Path = write_tweet_cache(tmp_path, "123", "old")
+    fetched: dict[str, Any] = {"status": {"id": "123", "text": "new"}, "author": {"screen_name": "someuser"}}
+    monkeypatch.setattr(twitter_module.niquests, "get", lambda *a, **kw: FakeResponse(fetched))
+
+    result = twitter_module.get_tweet("123", force_refresh=True)
+
+    assert result["status"]["text"] == "new"
+    assert json.loads(cache_file.read_text(encoding="utf-8"))["status"]["text"] == "new"
+
+
+def test_json_endpoint_serves_cached_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The download endpoint should return the saved JSON as an attachment."""
+    monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
+    write_tweet_cache(tmp_path, "123", "hello")
+
+    def unexpected_fetch(*args: object, **kwargs: object) -> None:
+        msg = "fxtwitter should not be called when the cache exists"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(twitter_module.niquests, "get", unexpected_fetch)
+    client: TestClient[Litestar] = TestClient(app=app)
+
+    response: Response = client.get("/twitter/json/someuser/123")
+
+    assert response.status_code == 200
+    assert response.json()["status"]["text"] == "hello"
+    assert "attachment" in response.headers["content-disposition"]
+    assert "123.json" in response.headers["content-disposition"]
+
+
+def test_any_query_string_refreshes_json_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Any query string should replace the cached JSON before serving it."""
+    monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
+    cache_file: Path = write_tweet_cache(tmp_path, "123", "old")
+    fetched: dict[str, Any] = {"status": {"id": "123", "text": "fresh"}, "author": {"screen_name": "someuser"}}
+    monkeypatch.setattr(twitter_module.niquests, "get", lambda *a, **kw: FakeResponse(fetched))
+    client: TestClient[Litestar] = TestClient(app=app)
+
+    response: Response = client.get("/twitter/json/someuser/123?whatever=1")
+
+    assert response.status_code == 200
+    assert response.json()["status"]["text"] == "fresh"
+    assert json.loads(cache_file.read_text(encoding="utf-8"))["status"]["text"] == "fresh"
+
+
+def test_component_embed_has_open_and_download_buttons() -> None:
+    """The component embed should offer both an X link and a JSON download."""
+    payload: dict[str, Any] = build_discord_component_embed(
+        author_name="Some User",
+        text="hello",
+        description="",
+        username="someuser",
+        tweet_url="https://x.com/someuser/status/123",
+        images=[],
+        video=None,
+        json_url="https://e.lovinator.space/twitter/json/someuser/123",
+    )
+
+    action_rows: list[dict[str, Any]] = [
+        component for component in payload["component"]["components"] if component.get("type") == 1
+    ]
+    assert len(action_rows) == 1
+    buttons: list[dict[str, Any]] = action_rows[0]["components"]
+    assert [button["label"] for button in buttons] == ["Open on X", "Download JSON"]
+    assert buttons[1]["url"] == "https://e.lovinator.space/twitter/json/someuser/123"
+    assert all(button["style"] == 5 for button in buttons)
+
+
+def test_tweet_page_links_to_json_download(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The embed page should also expose a regular link to the JSON file."""
+    monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
+    write_tweet_cache(tmp_path, "123", "hello")
+    client: TestClient[Litestar] = TestClient(app=app)
+
+    response: Response = client.get("/someuser/status/123", headers={"x-forwarded-for": "127.0.0.1"})
+
+    assert response.status_code == 200
+    assert "/twitter/json/someuser/123" in response.text
+    assert "Download JSON" in response.text
+
+
+@pytest.mark.parametrize("query", ["fasfsafas", "v=2", "x", "t=123&foo=bar"])
+def test_any_query_string_refreshes_embed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, query: str) -> None:
+    """Appending any query string to the embed URL should refresh the tweet."""
+    monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
+    cache_file: Path = write_tweet_cache(tmp_path, "123", "old")
+    fetched: dict[str, Any] = {
+        "status": {"id": "123", "text": "fresh"},
+        "author": {"id": "1", "name": "Some User", "screen_name": "someuser"},
+    }
+    monkeypatch.setattr(twitter_module.niquests, "get", lambda *a, **kw: FakeResponse(fetched))
+    client: TestClient[Litestar] = TestClient(app=app)
+
+    response: Response = client.get(
+        f"/someuser/status/123?{query}",
+        headers={"x-forwarded-for": "127.0.0.1"},
+    )
+
+    assert response.status_code == 200
+    assert "fresh" in response.text
+    assert json.loads(cache_file.read_text(encoding="utf-8"))["status"]["text"] == "fresh"

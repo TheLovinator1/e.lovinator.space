@@ -87,6 +87,12 @@
             <dd>
                 <a href="{{ tweet_url }}">{{ tweet_url }}</a>
             </dd>
+            {% if json_url %}
+                <dt>JSON</dt>
+                <dd>
+                    <a href="{{ json_url }}">Download JSON</a>
+                </dd>
+            {% endif %}
         </dl>
         {% if quality_note %}
             <hr>

@@ -20,7 +20,9 @@ import niquests
 from dotenv import load_dotenv
 from litestar import Request
 from litestar import get
+from litestar.exceptions import NotFoundException
 from litestar.params import PathParameter
+from litestar.response import File
 from litestar.response import Redirect
 from litestar.response import Response
 from litestar.response import Template
@@ -249,10 +251,117 @@ def convert_urls_to_links(text: str, facets: list[dict[str, Any]]) -> str:
     return pattern.sub(lambda match: anchors[match.group(0)], escaped_text)
 
 
-def get_tweet(tweet_id: str) -> dict[str, Any]:
-    """Returns tweet from fxtwitter API."""
-    api_url: str = f"https://api.fxtwitter.com/2/status/{tweet_id}?about_account=1&lang=en"
+def tweet_cache_path(tweet_id: str) -> Path:
+    """Return the path where a tweet's raw fxtwitter JSON is stored.
 
+    Args:
+        tweet_id: The status ID of the tweet.
+
+    Returns:
+        The path of the cache file.
+    """
+    return data_dir() / "Twitter" / "Downloads" / f"{tweet_id}.json"
+
+
+def find_tweet_cache(tweet_id: str) -> Path | None:
+    """Find cached JSON for a tweet, including caches from older user-ID folders.
+
+    Args:
+        tweet_id: The status ID of the tweet.
+
+    Returns:
+        The path of the cached JSON, or None when there is no cache file.
+    """
+    if not tweet_id.isdigit():
+        return None
+
+    cache_file: Path = tweet_cache_path(tweet_id)
+    if cache_file.is_file():
+        return cache_file
+
+    downloads_dir: Path = data_dir() / "Twitter" / "Downloads"
+    for legacy_file in downloads_dir.glob(f"*/{tweet_id}.json"):
+        if legacy_file.is_file():
+            return legacy_file
+    return None
+
+
+def read_tweet_cache(cache_file: Path) -> dict[str, Any] | None:
+    """Read cached tweet JSON, returning None if the file is missing or unusable.
+
+    Args:
+        cache_file: The cache file to read.
+
+    Returns:
+        The cached tweet JSON, or None when it cannot be used.
+    """
+    try:
+        cached: Any = json.loads(cache_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Could not read cached tweet {cache_file}: {e}")
+        return None
+    if not isinstance(cached, dict):
+        logger.warning(f"Cached tweet {cache_file} was not a JSON object")
+        return None
+    return cached
+
+
+def save_tweet_cache(tweet_id: str, json_data: dict[str, Any]) -> None:
+    """Write raw fxtwitter JSON to disk so it can be served and reused."""
+    if not tweet_id.isdigit():
+        return
+
+    cache_file: Path = tweet_cache_path(tweet_id)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(json.dumps(json_data, ensure_ascii=False), encoding="utf-8")
+
+
+def apply_tweet_translation(json_data: dict[str, Any]) -> dict[str, Any]:
+    """Replace the status text with its translation when fxtwitter supplies one.
+
+    Args:
+        json_data: The tweet JSON to update.
+
+    Returns:
+        The tweet JSON with any translation applied to the status text.
+    """
+    status: dict[str, Any] = json_data.get("status") or {}
+    translation: dict[str, Any] = status.get("translation") or {}
+    translated_text: str = str(translation.get("text") or "")
+    if translated_text:
+        status["text"] = translated_text
+        json_data["status"] = status
+    return json_data
+
+
+def wants_cache_bust(request: Request) -> bool:
+    """Return True when the URL has any query string, e.g. a cache-busting token."""
+    return bool(request.query_params)
+
+
+def get_tweet(tweet_id: str, *, force_refresh: bool = False) -> dict[str, Any]:
+    """Return tweet data from disk when available, otherwise fetch it from fxtwitter.
+
+    Args:
+        tweet_id: The status ID to look up.
+        force_refresh: Ignore the cache and overwrite it with a fresh API response.
+
+    Returns:
+        The tweet JSON, with any translation applied to the status text.
+
+    Raises:
+        TypeError: If fxtwitter returns JSON that is not an object.
+    """
+    if not force_refresh:
+        cache_file: Path | None = find_tweet_cache(tweet_id)
+        if cache_file is not None:
+            cached_data: dict[str, Any] | None = read_tweet_cache(cache_file)
+            if cached_data is not None:
+                logger.info(f"Tweet already downloaded: {tweet_id}")
+                return apply_tweet_translation(cached_data)
+
+    logger.info(f"Downloading tweet: {tweet_id}")
+    api_url: str = f"https://api.fxtwitter.com/2/status/{tweet_id}?about_account=1&lang=en"
     response: niquests.Response = niquests.get(
         api_url,
         headers={
@@ -261,40 +370,13 @@ def get_tweet(tweet_id: str) -> dict[str, Any]:
     )
     response.raise_for_status()
 
-    json_data: dict[str, Any] = response.json()
-    author: dict[str, Any] = json_data.get("author") or {}
-    user_id: str = str(author.get("id") or "")
+    json_data: Any = response.json()
+    if not isinstance(json_data, dict):
+        msg = f"fxtwitter returned invalid JSON for {tweet_id}"
+        raise TypeError(msg)
 
-    json_data = get_tweet_data(tweet_id, json_data, user_id)
-
-    status: dict[str, Any] = json_data.get("status") or {}
-
-    translation: dict[str, Any] = status.get("translation") or {}
-    translated_text: str = str(translation.get("text") or "")
-    if translated_text:
-        status["text"] = translated_text
-        json_data["status"] = status
-
-    return json_data
-
-
-def get_tweet_data(tweet_id: str, json_data: dict[str, Any], user_id: str) -> dict[str, Any]:
-    """Returns tweet data from cache or downloads it if not cached."""
-    twitter_download_path: Path = data_dir() / "Twitter" / "Downloads" / f"{user_id}"
-    twitter_download_path.mkdir(parents=True, exist_ok=True)
-
-    cache_file: Path = twitter_download_path / f"{tweet_id}.json"
-
-    if cache_file.exists():
-        logger.info(f"Tweet already downloaded: {tweet_id}")
-        try:
-            return json.loads(cache_file.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            logger.warning(f"Cached tweet {tweet_id} was corrupted, re-downloading")
-
-    logger.info(f"Downloading tweet: {tweet_id}")
-    cache_file.write_text(json.dumps(json_data, ensure_ascii=False), encoding="utf-8")
-    return json_data
+    save_tweet_cache(tweet_id, json_data)
+    return apply_tweet_translation(json_data)
 
 
 class Photo(TypedDict):
@@ -350,6 +432,9 @@ _MAX_EMBED_VIDEO_BYTES: int = 100 * 1024 * 1024
 _MAX_EMBED_VIDEO_DIMENSION: int = 1920
 """Largest video dimension Discord reliably plays. 4K uploads work but waste bandwidth."""
 
+_MAX_MEDIA_URL_LENGTH: int = 2048
+"""Longest URL Discord accepts for an unfurled media item."""
+
 _VIDEO_DIMENSIONS_RE: re.Pattern[str] = re.compile(r"/(\d{2,5})x(\d{2,5})/")
 
 
@@ -369,7 +454,7 @@ def _video_dimensions(url: str, default: tuple[int, int]) -> tuple[int, int]:
     return default
 
 
-def select_video_rendition(video: dict[str, Any]) -> tuple[str, int, int]:
+def select_video_rendition(video: dict[str, Any]) -> tuple[str, int, int]:  # ruff: ignore[too-many-locals]
     """Pick a video rendition that Discord can fetch, measure, and embed.
 
     fxtwitter's top-level ``url`` always points at the highest-quality MP4. For a long
@@ -440,7 +525,14 @@ def select_video_rendition(video: dict[str, Any]) -> tuple[str, int, int]:
 
 
 def _format_size(num_bytes: float) -> str:
-    """Format a byte count as megabytes or gigabytes."""
+    """Format a byte count as megabytes or gigabytes.
+
+    Args:
+        num_bytes: The size in bytes.
+
+    Returns:
+        A human-readable size string.
+    """
     if num_bytes >= 1024**3:
         return f"{num_bytes / 1024**3:.1f} GB"
     return f"{num_bytes / 1024**2:.0f} MB"
@@ -485,12 +577,16 @@ def describe_video_quality(video: dict[str, Any], url: str, width: int, height: 
     improvements: list[str] = []
     pixel_ratio: float = (source_width * source_height) / (width * height)
     if pixel_ratio > 1.0:
-        improvements.append(f"{pixel_ratio:.1f}× the pixels")
+        improvements.append(f"{pixel_ratio:.1f}× the pixels")  # ruff: ignore[ambiguous-unicode-character-string]
     if source_bitrate > embedded_bitrate > 0:
-        improvements.append(f"{source_bitrate / embedded_bitrate:.1f}× the bitrate")
+        improvements.append(f"{source_bitrate / embedded_bitrate:.1f}× the bitrate")  # ruff: ignore[ambiguous-unicode-character-string]
 
-    better: str = f" — {' and '.join(improvements)}" if improvements else ""
-    return f"⚠️ Higher quality on X: {source_width}×{source_height}{size_suffix(source_size)}{better}."
+    better: str = f" - {' and '.join(improvements)}" if improvements else ""
+    return f"⚠️ Higher quality on X: {source_width}×{source_height}{size_suffix(source_size)}{better}."  # ruff: ignore[ambiguous-unicode-character-string]
+
+
+_COMPONENT_EMBED_SAFE_BYTES: int = 2800
+"""Payload target that leaves headroom below Discord's 3,000-byte limit."""
 
 
 def _discord_component_embed_size(payload: dict[str, Any]) -> int:
@@ -507,7 +603,7 @@ def _discord_component_embed_size(payload: dict[str, Any]) -> int:
     return len(serialized.encode("utf-8"))
 
 
-def build_discord_component_embed(
+def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
     *,
     author_name: str,
     text: str,
@@ -517,20 +613,24 @@ def build_discord_component_embed(
     images: list[Photo],
     video: Video | None,
     quality_note: str = "",
+    json_url: str = "",
 ) -> dict[str, Any]:
     """Build a Discord Component Embed for an X post.
 
-    Uses a text section with an X link button and a media gallery. Video
-    media is represented as a gallery item so Discord can show a preview
-    frame with playback controls.
+    Uses a text section, an action row with an X link button and an optional
+    JSON download button, and a media gallery. Video media is represented as a
+    gallery item so Discord can show a preview frame with playback controls.
 
     The payload is kept below Discord's 3,000-byte limit.
+
+    Returns:
+        The Discord component embed payload.
     """
     media_items: list[dict[str, Any]] = []
 
     if video:
         media_url: str = video["url"]
-        if urlparse(media_url).scheme in {"http", "https"} and len(media_url) <= 2048:
+        if urlparse(media_url).scheme in {"http", "https"} and len(media_url) <= _MAX_MEDIA_URL_LENGTH:
             media_items.append({
                 "media": {"url": media_url},
                 "description": f"Video by @{username}"[:200],
@@ -538,7 +638,7 @@ def build_discord_component_embed(
     else:
         for index, photo in enumerate(images[:10], start=1):
             media_url = photo["url"]
-            if urlparse(media_url).scheme not in {"http", "https"} or len(media_url) > 2048:
+            if urlparse(media_url).scheme not in {"http", "https"} or len(media_url) > _MAX_MEDIA_URL_LENGTH:
                 continue
 
             media_items.append({
@@ -559,6 +659,22 @@ def build_discord_component_embed(
             content_parts.append(post_text)
         if engagement:
             content_parts.append(engagement)
+        buttons: list[dict[str, Any]] = [
+            {
+                "type": 2,
+                "style": 5,
+                "url": tweet_url,
+                "label": "Open on X",
+            },
+        ]
+        if json_url:
+            buttons.append({
+                "type": 2,
+                "style": 5,
+                "url": json_url,
+                "label": "Download JSON",
+            })
+
         components: list[dict[str, Any]] = [
             {
                 "type": 9,
@@ -568,18 +684,12 @@ def build_discord_component_embed(
                         "content": "\n\n".join(content_parts),
                     },
                 ],
-                "accessory": {
-                    "type": 2,
-                    "style": 5,
-                    "url": tweet_url,
-                    "label": "Open on X",
-                },
             },
+            {"type": 1, "components": buttons},
         ]
 
         if quality_note:
-            components.append({"type": 14})
-            components.append({"type": 10, "content": quality_note})
+            components.extend(({"type": 14}, {"type": 10, "content": quality_note}))
 
         if media_items:
             components.append({
@@ -598,7 +708,7 @@ def build_discord_component_embed(
     payload: dict[str, Any] = make_payload()
 
     # Leave headroom for any JSON escaping differences between serializers.
-    while _discord_component_embed_size(payload) > 2800:
+    while _discord_component_embed_size(payload) > _COMPONENT_EMBED_SAFE_BYTES:
         if media_items:
             media_items.pop()
         elif post_text:
@@ -767,7 +877,7 @@ async def twitter(  # ruff: ignore[too-many-locals]
         return Redirect(f"https://x.com/{username}/status/{tweet_id}", status_code=302)
 
     try:
-        json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
+        json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id, force_refresh=wants_cache_bust(request))
     except niquests.HTTPError as e:
         logger.error(f"Failed to fetch tweet: {tweet_id}", exc_info=e)
         return Redirect(f"https://x.com/{username}/status/{tweet_id}", status_code=302)
@@ -780,6 +890,7 @@ async def twitter(  # ruff: ignore[too-many-locals]
     screen_name: str = str(author.get("screen_name") or username)
     tweet_url: str = f"https://x.com/{screen_name}/status/{tweet_id}"
     local_url: str = f"https://e.lovinator.space/{screen_name}/status/{tweet_id}"
+    json_url: str = f"{str(request.base_url).rstrip('/')}/twitter/json/{quote(screen_name, safe='')}/{tweet_id}"
 
     logger.info(f"Serving tweet embed: {tweet_id}")
 
@@ -845,6 +956,7 @@ async def twitter(  # ruff: ignore[too-many-locals]
         images=photos,
         video=video,
         quality_note=quality_note,
+        json_url=json_url,
     )
 
     response = Template(
@@ -863,6 +975,7 @@ async def twitter(  # ruff: ignore[too-many-locals]
             "og_type": og_type,
             "twitter_handle": f"@{screen_name}",
             "tweet_url": tweet_url,
+            "json_url": json_url,
             "username": screen_name,
             "tweet_id": tweet_id,
             "title": title,
@@ -878,6 +991,44 @@ async def twitter(  # ruff: ignore[too-many-locals]
 
     response.headers["Cache-Control"] = "public, max-age=300"
     return response
+
+
+@get("/twitter/json/{username:str}/{tweet_id:str}")
+async def tweet_json_file(  # ruff: ignore[unused-async]
+    request: Request,
+    username: Annotated[str, PathParameter()],
+    tweet_id: Annotated[str, PathParameter()],
+) -> File:
+    """Serve a tweet's cached fxtwitter JSON as a file download.
+
+    Fetches the tweet first if it isn't cached yet (or if the URL has any query
+    string), so the download button always has a file to serve.
+
+    Args:
+        request: The incoming request.
+        username: The Twitter/X handle, used only to make the URL readable.
+        tweet_id: The status ID of the tweet.
+
+    Returns:
+        The saved JSON file as an attachment.
+
+    Raises:
+        NotFoundException: If the tweet cannot be fetched or no cache file exists.
+    """
+    try:
+        get_tweet(tweet_id=tweet_id, force_refresh=wants_cache_bust(request))
+    except niquests.HTTPError as e:
+        logger.error(f"Failed to fetch tweet JSON: {tweet_id}", exc_info=e)
+        msg = f"Tweet {tweet_id} not found"
+        raise NotFoundException(msg) from e
+
+    cache_file: Path | None = find_tweet_cache(tweet_id)
+    if cache_file is None:
+        msg = f"No cached JSON for tweet {tweet_id}"
+        raise NotFoundException(msg)
+
+    logger.info(f"Serving tweet JSON: {username}/{tweet_id}")
+    return File(path=cache_file, media_type="application/json", filename=f"{tweet_id}.json")
 
 
 @get(path="/api/v1/statuses/{tweet_id:str}")
@@ -899,7 +1050,7 @@ async def tweet_status_api(  # ruff: ignore[unused-async]
         The Status document as JSON.
     """
     try:
-        json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
+        json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id, force_refresh=wants_cache_bust(request))
     except niquests.HTTPError:
         return Response(content={"error": "Not found"}, status_code=404, media_type="application/json")
 
@@ -928,7 +1079,7 @@ async def users_statuses(  # ruff: ignore[unused-async]
         The Status document as JSON.
     """
     try:
-        json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
+        json_data: dict[str, Any] = get_tweet(tweet_id=tweet_id, force_refresh=wants_cache_bust(request))
     except niquests.HTTPError:
         return Response(content={"error": "Not found"}, status_code=404, media_type="application/json")
 
@@ -956,7 +1107,7 @@ async def tweet_oembed(  # ruff: ignore[unused-async]
         The oEmbed document as JSON.
     """
     try:
-        oembed_data: dict[str, Any] = get_tweet(tweet_id=tweet_id)
+        oembed_data: dict[str, Any] = get_tweet(tweet_id=tweet_id, force_refresh=wants_cache_bust(request))
     except niquests.HTTPError:
         return Response(content={"error": "Not found"}, status_code=404, media_type="application/json")
 

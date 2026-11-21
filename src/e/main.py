@@ -15,6 +15,7 @@ from litestar.template import TemplateConfig
 from e.reddit import reddit
 from e.reddit import reddit_video_file
 from e.reddit import subreddit
+from e.twitter import tweet_json_file
 from e.twitter import tweet_oembed
 from e.twitter import tweet_status_api
 from e.twitter import twitter
@@ -64,6 +65,7 @@ app = Litestar(
     route_handlers=[
         apple_touch_icon,
         favicon,
+        tweet_json_file,
         tweet_oembed,
         tweet_status_api,
         twitter,
