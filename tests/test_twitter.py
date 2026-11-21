@@ -17,6 +17,7 @@ from e import twitter as twitter_module
 from e.main import app
 from e.twitter import build_discord_component_embed
 from e.twitter import build_embed_footer
+from e.twitter import contains_emoji
 from e.twitter import convert_urls_to_links
 from e.twitter import describe_video_quality
 from e.twitter import get_client_ip
@@ -325,8 +326,26 @@ def test_component_embed_renders_separator_and_quality_warning() -> None:
     assert separator_index < warning_index
 
 
+def test_component_embed_links_full_name_without_emoji() -> None:
+    """A plain display name is clickable and points to the tweet."""
+    tweet_url: str = "https://x.com/someuser/status/123"
+    payload: dict[str, Any] = build_discord_component_embed(
+        author_name="Some User",
+        text="hello",
+        description="",
+        username="someuser",
+        images=[],
+        video=None,
+        tweet_url=tweet_url,
+    )
+
+    content: str = payload["component"]["components"][0]["content"]
+    assert content == f"## [Some User]({tweet_url}) (@someuser)\n\nhello"
+
+
 def test_component_embed_keeps_emoji_out_of_link_label() -> None:
     """Discord rejects emoji in masked links, so only the handle is linked."""
+    tweet_url: str = "https://x.com/Elizabeth000425/status/123"
     payload: dict[str, Any] = build_discord_component_embed(
         author_name="Elizabeth.R🥀MERCREW",
         text="hello",
@@ -334,10 +353,17 @@ def test_component_embed_keeps_emoji_out_of_link_label() -> None:
         username="Elizabeth000425",
         images=[],
         video=None,
+        tweet_url=tweet_url,
     )
 
     content: str = payload["component"]["components"][0]["content"]
-    assert content == ("## Elizabeth.R🥀MERCREW ([@Elizabeth000425](https://x.com/Elizabeth000425))\n\nhello")
+    assert content == f"## Elizabeth.R🥀MERCREW [@Elizabeth000425]({tweet_url})\n\nhello"
+
+
+def test_contains_emoji() -> None:
+    """Emoji are detected in display names without flagging plain text."""
+    assert contains_emoji("Elizabeth.R🥀MERCREW")
+    assert not contains_emoji("Some User")
 
 
 def test_embed_footer_uses_relative_discord_timestamp() -> None:
@@ -412,7 +438,9 @@ def test_tweet_page_renders_footer_in_og_and_component(monkeypatch: pytest.Monke
     assert script is not None
     payload: dict[str, Any] = json.loads(script.group(1))
     footer: str = f"Japan • Japan App Store • <t:{created_timestamp}:R>"
-    assert any(component.get("content") == footer for component in payload["component"]["components"])
+    components: list[dict[str, Any]] = payload["component"]["components"]
+    assert components[0]["content"].startswith("## [Some User](https://x.com/someuser/status/123) (@someuser)")
+    assert any(component.get("content") == footer for component in components)
 
 
 def test_get_client_ip_headers() -> None:

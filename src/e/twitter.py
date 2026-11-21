@@ -588,6 +588,22 @@ def describe_video_quality(video: dict[str, Any], url: str, width: int, height: 
 _COMPONENT_EMBED_SAFE_BYTES: int = 2800
 """Payload target that leaves headroom below Discord's 3,000-byte limit."""
 
+_EMOJI_PATTERN: re.Pattern[str] = re.compile(
+    r"[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\u20E3\uFE0F]",
+)
+
+
+def contains_emoji(text: str) -> bool:
+    """Check for emoji, which Discord does not allow in masked-link labels.
+
+    Args:
+        text: The display name to check.
+
+    Returns:
+        ``True`` if the name contains an emoji character.
+    """
+    return bool(_EMOJI_PATTERN.search(text))
+
 
 def build_embed_footer(about_account: dict[str, Any], created_timestamp: int = 0) -> str:
     """Build the footer text for an embed.
@@ -640,13 +656,15 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
     quality_note: str = "",
     json_url: str = "",
     footer: str = "",
+    tweet_url: str = "",
 ) -> dict[str, Any]:
     """Build a Discord Component Embed for an X post.
 
     Uses a text display, an optional action row with a JSON button,
     and a media gallery. Video media is represented as a gallery item so Discord
     can show a preview frame with playback controls. An optional footer text
-    display is appended last.
+    display is appended last. The heading links to the tweet; display names
+    with emoji link the handle instead, since Discord bans emoji in link labels.
 
     The payload is kept below Discord's 3,000-byte limit.
 
@@ -678,12 +696,14 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
     engagement: str = description[:250]
 
     def make_payload() -> dict[str, Any]:
-        profile_url: str = f"https://x.com/{quote(username, safe='')}"
-        # Emoji are not allowed in Discord's masked-link labels, so only the
-        # handle is linked. The display name (which may contain emoji) stays plain.
-        content_parts: list[str] = [
-            f"## {heading} [@{username}]({profile_url})",
-        ]
+        post_url: str = tweet_url or f"https://x.com/{quote(username, safe='')}"
+        if contains_emoji(heading):
+            # Emoji are not allowed in Discord's masked-link labels, so only the
+            # handle is linked when the display name contains one.
+            heading_text: str = f"{heading} [@{username}]({post_url})"
+        else:
+            heading_text = f"[{heading}]({post_url}) (@{username})"
+        content_parts: list[str] = [f"## {heading_text}"]
         if post_text:
             content_parts.append(post_text)
         if engagement:
@@ -982,6 +1002,7 @@ async def twitter(  # ruff: ignore[too-many-locals]
         quality_note=quality_note,
         json_url=json_url,
         footer=component_footer,
+        tweet_url=tweet_url,
     )
 
     response = Template(
