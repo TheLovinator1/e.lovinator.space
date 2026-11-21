@@ -609,7 +609,6 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
     text: str,
     description: str,
     username: str,
-    tweet_url: str,
     images: list[Photo],
     video: Video | None,
     quality_note: str = "",
@@ -617,9 +616,9 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
 ) -> dict[str, Any]:
     """Build a Discord Component Embed for an X post.
 
-    Uses a text section, an action row with an X link button and an optional
-    JSON download button, and a media gallery. Video media is represented as a
-    gallery item so Discord can show a preview frame with playback controls.
+    Uses a text display, an optional action row with a JSON download button,
+    and a media gallery. Video media is represented as a gallery item so Discord
+    can show a preview frame with playback controls.
 
     The payload is kept below Discord's 3,000-byte limit.
 
@@ -659,34 +658,24 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
             content_parts.append(post_text)
         if engagement:
             content_parts.append(engagement)
-        buttons: list[dict[str, Any]] = [
+        components: list[dict[str, Any]] = [
             {
-                "type": 2,
-                "style": 5,
-                "url": tweet_url,
-                "label": "Open on X",
+                "type": 10,
+                "content": "\n\n".join(content_parts),
             },
         ]
         if json_url:
-            buttons.append({
-                "type": 2,
-                "style": 5,
-                "url": json_url,
-                "label": "Download JSON",
-            })
-
-        components: list[dict[str, Any]] = [
-            {
-                "type": 9,
+            components.append({
+                "type": 1,
                 "components": [
                     {
-                        "type": 10,
-                        "content": "\n\n".join(content_parts),
+                        "type": 2,
+                        "style": 5,
+                        "url": json_url,
+                        "label": "Download JSON",
                     },
                 ],
-            },
-            {"type": 1, "components": buttons},
-        ]
+            })
 
         if quality_note:
             components.extend(({"type": 14}, {"type": 10, "content": quality_note}))
@@ -952,7 +941,6 @@ async def twitter(  # ruff: ignore[too-many-locals]
         text=text,
         description=emoji_poop,
         username=screen_name,
-        tweet_url=tweet_url,
         images=photos,
         video=video,
         quality_note=quality_note,

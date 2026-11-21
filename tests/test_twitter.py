@@ -306,7 +306,6 @@ def test_component_embed_renders_separator_and_quality_warning() -> None:
         text="Played GTA VI",
         description="👁️ 1K",
         username="Dee_Batch",
-        tweet_url="https://x.com/Dee_Batch/status/1",
         images=[],
         video=make_video(),
         quality_note="⚠️ Higher quality on X",
@@ -472,27 +471,44 @@ def test_any_query_string_refreshes_json_endpoint(monkeypatch: pytest.MonkeyPatc
     assert json.loads(cache_file.read_text(encoding="utf-8"))["status"]["text"] == "fresh"
 
 
-def test_component_embed_has_open_and_download_buttons() -> None:
-    """The component embed should offer both an X link and a JSON download."""
+def test_component_embed_has_only_download_button() -> None:
+    """The component embed should offer the JSON download without an X button."""
     payload: dict[str, Any] = build_discord_component_embed(
         author_name="Some User",
         text="hello",
         description="",
         username="someuser",
-        tweet_url="https://x.com/someuser/status/123",
         images=[],
         video=None,
         json_url="https://e.lovinator.space/twitter/json/someuser/123",
     )
 
-    action_rows: list[dict[str, Any]] = [
-        component for component in payload["component"]["components"] if component.get("type") == 1
-    ]
+    components: list[dict[str, Any]] = payload["component"]["components"]
+    assert components[0]["type"] == 10
+
+    action_rows: list[dict[str, Any]] = [component for component in components if component.get("type") == 1]
     assert len(action_rows) == 1
     buttons: list[dict[str, Any]] = action_rows[0]["components"]
-    assert [button["label"] for button in buttons] == ["Open on X", "Download JSON"]
-    assert buttons[1]["url"] == "https://e.lovinator.space/twitter/json/someuser/123"
+    assert [button["label"] for button in buttons] == ["Download JSON"]
+    assert buttons[0]["url"] == "https://e.lovinator.space/twitter/json/someuser/123"
     assert all(button["style"] == 5 for button in buttons)
+    assert "Open on X" not in json.dumps(payload)
+
+
+def test_component_embed_without_json_url_has_text_only() -> None:
+    """Without a download URL there should be no action row at all."""
+    payload: dict[str, Any] = build_discord_component_embed(
+        author_name="Some User",
+        text="hello",
+        description="",
+        username="someuser",
+        images=[],
+        video=None,
+    )
+
+    components: list[dict[str, Any]] = payload["component"]["components"]
+    assert components[0]["type"] == 10
+    assert all(component.get("type") != 1 for component in components)
 
 
 def test_tweet_page_links_to_json_download(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
