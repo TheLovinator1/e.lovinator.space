@@ -352,11 +352,16 @@ def build_discord_component_embed(
     canonical_url: str,
     images: list[dict[str, Any]],
     video: dict[str, Any] | None,
+    *,
+    title_url: str | None = None,
+    thumbnail_url: str | None = None,
 ) -> str:
     """Build a Discord Component Embed and return its HTML-safe JSON string.
 
-    The payload uses a text section, an optional link button, and an optional
-    media gallery. It is kept within Discord's 3,000-byte payload limit.
+    The payload uses a text section, an optional link button or thumbnail
+    accessory, and an optional media gallery. When ``title_url`` is given,
+    the heading becomes a markdown link. It is kept within Discord's
+    3,000-byte payload limit.
     """
     media_items: list[dict[str, Any]] = []
 
@@ -382,11 +387,26 @@ def build_discord_component_embed(
     heading: str = title[:250]
     body: str = description[:1200]
 
+    thumbnail: dict[str, Any] | None = None
+    if (
+        isinstance(thumbnail_url, str)
+        and thumbnail_url.startswith(("https://", "http://"))
+        and len(thumbnail_url) <= 2048
+    ):
+        thumbnail = {"type": 11, "media": {"url": thumbnail_url}}
+
     def make_payload() -> dict[str, Any]:
-        content: str = f"# {heading}" if heading else ""
+        heading_text: str = f"**[{heading}]({title_url})**" if title_url and heading else heading
+        content: str = f"# {heading_text}" if heading_text else ""
         if body:
             content = f"{content}\n{body}" if content else body
 
+        accessory: dict[str, Any] = thumbnail or {
+            "type": 2,
+            "style": 5,
+            "url": canonical_url,
+            "label": "Open Reddit",
+        }
         components: list[dict[str, Any]] = [
             {
                 "type": 9,
@@ -396,12 +416,7 @@ def build_discord_component_embed(
                         "content": content,
                     },
                 ],
-                "accessory": {
-                    "type": 2,
-                    "style": 5,
-                    "url": canonical_url,
-                    "label": "Open Reddit",
-                },
+                "accessory": accessory,
             },
         ]
 
@@ -495,25 +510,25 @@ async def subreddit(
         logger.warning("Failed to fetch subreddit {} stats: {}", canonical_url, exc)
         return Redirect(canonical_url, status_code=302)
 
-    display_name: str = str(about.get("display_name") or subreddit)
-    title: str = str(about.get("title") or f"r/{display_name}")
+    subreddit_label: str = f"/r/{subreddit}"
     stats: str = format_subreddit_stats(about)
     public_description: str = str(about.get("public_description") or "").strip()
-    description: str = f"r/{display_name} | {stats}"
+    description: str = stats
     if public_description:
         description = f"{description}\n\n{public_description}"
 
-    images: list[dict[str, Any]] = []
-    for key in ("banner_img", "icon_img"):
-        if image_url := _safe_https_url(about.get(key)):
-            images.append({"url": image_url})
+    banner_url: str | None = _safe_https_url(about.get("banner_img"))
+    icon_url: str | None = _safe_https_url(about.get("icon_img"))
+    images: list[dict[str, Any]] = [{"url": banner_url}] if banner_url else []
 
     component_embed_json: str = build_discord_component_embed(
-        title=title,
+        title=subreddit_label,
         description=description,
         canonical_url=canonical_url,
         images=images,
         video=None,
+        title_url=canonical_url,
+        thumbnail_url=icon_url,
     )
 
     response = Template(
@@ -522,9 +537,9 @@ async def subreddit(
             "images": images,
             "video": None,
             "poster": None,
-            "og_image": images[0] if images else None,
+            "og_image": images[0] if images else ({"url": icon_url} if icon_url else None),
             "og_type": "website",
-            "title": title,
+            "title": subreddit_label,
             "description": description,
             "canonical_url": canonical_url,
             "discord_component_embed_json": component_embed_json,

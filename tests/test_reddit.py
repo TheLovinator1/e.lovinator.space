@@ -253,10 +253,14 @@ def test_subreddit_embed_shows_stats(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert response.status_code == 200
     assert '<meta property="og:type" content="website">' in response.text
+    assert '<meta property="og:title" content="/r/genshinsmols">' in response.text
+    assert '# **[/r/genshinsmols](https://www.reddit.com/r/genshinsmols)**' in response.text
+    assert '"type":11,"media"' in response.text
     assert "12.3K members" in response.text
     assert "678 online" in response.text
     assert "Created 2020-09-13" in response.text
     assert "Cute Genshin art" in response.text
+    assert "r/genshinsmols |" not in response.text
     assert "https://b.thumbs.redditmedia.com/banner.jpg" in response.text
     assert "https://styles.redditmedia.com/icon.png?x=1\\u0026y=2" in response.text
 
