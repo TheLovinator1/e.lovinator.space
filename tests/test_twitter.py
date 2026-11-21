@@ -325,8 +325,8 @@ def test_component_embed_renders_separator_and_quality_warning() -> None:
     assert separator_index < warning_index
 
 
-def test_embed_footer_uses_cest_in_summer() -> None:
-    """A summer tweet is rendered in CEST (UTC+2)."""
+def test_embed_footer_uses_relative_discord_timestamp() -> None:
+    """The tweet time becomes a Discord timestamp rendered in the viewer's locale."""
     created_timestamp: int = int(datetime(2026, 10, 22, 21, 54, tzinfo=UTC).timestamp())
 
     footer: str = build_embed_footer(
@@ -334,19 +334,7 @@ def test_embed_footer_uses_cest_in_summer() -> None:
         created_timestamp,
     )
 
-    assert footer == "Japan • Japan App Store • 22/10/2026, 23:54"
-
-
-def test_embed_footer_uses_cet_in_winter() -> None:
-    """A winter tweet is rendered in CET (UTC+1)."""
-    created_timestamp: int = int(datetime(2026, 1, 5, 22, 15, tzinfo=UTC).timestamp())
-
-    footer: str = build_embed_footer(
-        {"based_in": "Japan", "source": "Japan App Store"},
-        created_timestamp,
-    )
-
-    assert footer == "Japan • Japan App Store • 05/01/2026, 23:15"
+    assert footer == f"Japan • Japan App Store • <t:{created_timestamp}:R>"
 
 
 def test_embed_footer_without_timestamp_keeps_og_format() -> None:
@@ -361,7 +349,7 @@ def test_embed_footer_falls_back_to_site_name_without_about_account() -> None:
 
 def test_component_embed_has_footer_as_last_text_display() -> None:
     """The footer is a text component at the bottom of the Component Embed."""
-    footer: str = "Japan • Japan App Store • 22/10/2026, 23:54"
+    footer: str = "Japan • Japan App Store • <t:1792706040:R>"
     payload: dict[str, Any] = build_discord_component_embed(
         author_name="Some User",
         text="hello",
@@ -408,7 +396,7 @@ def test_tweet_page_renders_footer_in_og_and_component(monkeypatch: pytest.Monke
     )
     assert script is not None
     payload: dict[str, Any] = json.loads(script.group(1))
-    footer: str = "Japan • Japan App Store • 22/10/2026, 23:54"
+    footer: str = f"Japan • Japan App Store • <t:{created_timestamp}:R>"
     assert any(component.get("content") == footer for component in payload["component"]["components"])
 
 

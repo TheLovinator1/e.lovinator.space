@@ -15,7 +15,6 @@ from typing import Literal
 from typing import TypedDict
 from urllib.parse import quote
 from urllib.parse import urlparse
-from zoneinfo import ZoneInfo
 
 import niquests
 from dotenv import load_dotenv
@@ -589,15 +588,14 @@ def describe_video_quality(video: dict[str, Any], url: str, width: int, height: 
 _COMPONENT_EMBED_SAFE_BYTES: int = 2800
 """Payload target that leaves headroom below Discord's 3,000-byte limit."""
 
-_EMBED_TIMEZONE: ZoneInfo = ZoneInfo("Europe/Stockholm")
-"""CET/CEST timezone used for the footer timestamp."""
-
 
 def build_embed_footer(about_account: dict[str, Any], created_timestamp: int = 0) -> str:
     """Build the footer text for an embed.
 
     Discord appends its own localized timestamp to Open Graph footers, so pass
     ``created_timestamp`` only for Component Embeds, which have no footer field.
+    The Component Embed uses a Discord timestamp so each viewer sees a relative
+    date in their own locale.
 
     Args:
         about_account: The ``about_account`` object from the API response.
@@ -605,15 +603,14 @@ def build_embed_footer(about_account: dict[str, Any], created_timestamp: int = 0
             to omit the timestamp.
 
     Returns:
-        The footer text, e.g. ``Japan • Japan App Store • 22/10/2026, 23:54``.
+        The footer text, e.g. ``Japan • Japan App Store • <t:1787757398:R>``.
     """
     based_in: str = str(about_account.get("based_in", "")).strip()
     source: str = str(about_account.get("source", "")).strip()
     parts: list[str] = [part for part in (based_in, source) if part] or ["e.lovinator.space"]
 
     if created_timestamp > 0:
-        local_time: datetime = datetime.fromtimestamp(created_timestamp, _EMBED_TIMEZONE)
-        parts.append(local_time.strftime("%d/%m/%Y, %H:%M"))
+        parts.append(f"<t:{created_timestamp}:R>")
 
     return " • ".join(parts)
 
