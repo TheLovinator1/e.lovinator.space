@@ -394,6 +394,17 @@ class FakeResponse:
         return self.payload
 
 
+def test_save_tweet_cache_writes_formatted_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Saved JSON should be indented so served files are easy to read."""
+    monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
+    payload: dict[str, Any] = {"status": {"id": "123", "text": "héllo"}}
+
+    twitter_module.save_tweet_cache("123", payload)
+
+    saved: str = twitter_module.tweet_cache_path("123").read_text(encoding="utf-8")
+    assert saved == json.dumps(payload, ensure_ascii=False, indent=2)
+
+
 def test_get_tweet_uses_cache_without_fetching(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A cached tweet should be read from disk without calling fxtwitter."""
     monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
@@ -437,7 +448,7 @@ def test_force_refresh_fetches_and_overwrites_cache(monkeypatch: pytest.MonkeyPa
 
 
 def test_json_endpoint_serves_cached_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The download endpoint should return the saved JSON as an attachment."""
+    """The JSON endpoint should return the saved JSON inline for browser viewing."""
     monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
     write_tweet_cache(tmp_path, "123", "hello")
 
@@ -452,7 +463,8 @@ def test_json_endpoint_serves_cached_file(monkeypatch: pytest.MonkeyPatch, tmp_p
 
     assert response.status_code == 200
     assert response.json()["status"]["text"] == "hello"
-    assert "attachment" in response.headers["content-disposition"]
+    assert "inline" in response.headers["content-disposition"]
+    assert "attachment" not in response.headers["content-disposition"]
     assert "123.json" in response.headers["content-disposition"]
 
 
@@ -471,8 +483,8 @@ def test_any_query_string_refreshes_json_endpoint(monkeypatch: pytest.MonkeyPatc
     assert json.loads(cache_file.read_text(encoding="utf-8"))["status"]["text"] == "fresh"
 
 
-def test_component_embed_has_only_download_button() -> None:
-    """The component embed should offer the JSON download without an X button."""
+def test_component_embed_has_only_json_button() -> None:
+    """The component embed should offer the JSON link without an X button."""
     payload: dict[str, Any] = build_discord_component_embed(
         author_name="Some User",
         text="hello",
@@ -489,14 +501,14 @@ def test_component_embed_has_only_download_button() -> None:
     action_rows: list[dict[str, Any]] = [component for component in components if component.get("type") == 1]
     assert len(action_rows) == 1
     buttons: list[dict[str, Any]] = action_rows[0]["components"]
-    assert [button["label"] for button in buttons] == ["Download JSON"]
+    assert [button["label"] for button in buttons] == ["JSON"]
     assert buttons[0]["url"] == "https://e.lovinator.space/twitter/json/someuser/123"
     assert all(button["style"] == 5 for button in buttons)
     assert "Open on X" not in json.dumps(payload)
 
 
 def test_component_embed_without_json_url_has_text_only() -> None:
-    """Without a download URL there should be no action row at all."""
+    """Without a JSON URL there should be no action row at all."""
     payload: dict[str, Any] = build_discord_component_embed(
         author_name="Some User",
         text="hello",
@@ -511,7 +523,7 @@ def test_component_embed_without_json_url_has_text_only() -> None:
     assert all(component.get("type") != 1 for component in components)
 
 
-def test_tweet_page_links_to_json_download(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_tweet_page_links_to_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The embed page should also expose a regular link to the JSON file."""
     monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
     write_tweet_cache(tmp_path, "123", "hello")
@@ -521,7 +533,7 @@ def test_tweet_page_links_to_json_download(monkeypatch: pytest.MonkeyPatch, tmp_
 
     assert response.status_code == 200
     assert "/twitter/json/someuser/123" in response.text
-    assert "Download JSON" in response.text
+    assert ">JSON</a>" in response.text
 
 
 @pytest.mark.parametrize("query", ["fasfsafas", "v=2", "x", "t=123&foo=bar"])

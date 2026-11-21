@@ -307,13 +307,13 @@ def read_tweet_cache(cache_file: Path) -> dict[str, Any] | None:
 
 
 def save_tweet_cache(tweet_id: str, json_data: dict[str, Any]) -> None:
-    """Write raw fxtwitter JSON to disk so it can be served and reused."""
+    """Write raw fxtwitter JSON to disk, formatted, so it can be served and reused."""
     if not tweet_id.isdigit():
         return
 
     cache_file: Path = tweet_cache_path(tweet_id)
     cache_file.parent.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(json.dumps(json_data, ensure_ascii=False), encoding="utf-8")
+    cache_file.write_text(json.dumps(json_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def apply_tweet_translation(json_data: dict[str, Any]) -> dict[str, Any]:
@@ -616,7 +616,7 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
 ) -> dict[str, Any]:
     """Build a Discord Component Embed for an X post.
 
-    Uses a text display, an optional action row with a JSON download button,
+    Uses a text display, an optional action row with a JSON button,
     and a media gallery. Video media is represented as a gallery item so Discord
     can show a preview frame with playback controls.
 
@@ -672,7 +672,7 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
                         "type": 2,
                         "style": 5,
                         "url": json_url,
-                        "label": "Download JSON",
+                        "label": "JSON",
                     },
                 ],
             })
@@ -987,10 +987,10 @@ async def tweet_json_file(  # ruff: ignore[unused-async]
     username: Annotated[str, PathParameter()],
     tweet_id: Annotated[str, PathParameter()],
 ) -> File:
-    """Serve a tweet's cached fxtwitter JSON as a file download.
+    """Serve a tweet's cached fxtwitter JSON inline in the browser.
 
     Fetches the tweet first if it isn't cached yet (or if the URL has any query
-    string), so the download button always has a file to serve.
+    string), so the JSON link always has a file to serve.
 
     Args:
         request: The incoming request.
@@ -1016,7 +1016,12 @@ async def tweet_json_file(  # ruff: ignore[unused-async]
         raise NotFoundException(msg)
 
     logger.info(f"Serving tweet JSON: {username}/{tweet_id}")
-    return File(path=cache_file, media_type="application/json", filename=f"{tweet_id}.json")
+    return File(
+        path=cache_file,
+        media_type="application/json",
+        filename=f"{tweet_id}.json",
+        content_disposition_type="inline",
+    )
 
 
 @get(path="/api/v1/statuses/{tweet_id:str}")
