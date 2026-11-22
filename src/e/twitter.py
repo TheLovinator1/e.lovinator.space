@@ -654,16 +654,14 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
     images: list[Photo],
     video: Video | None,
     quality_note: str = "",
-    json_url: str = "",
     footer: str = "",
     tweet_url: str = "",
 ) -> dict[str, Any]:
     """Build a Discord Component Embed for an X post.
 
-    Uses a text display, an optional action row with a JSON button,
-    and a media gallery. Video media is represented as a gallery item so Discord
-    can show a preview frame with playback controls. An optional footer text
-    display is appended last. The whole ``Name (@handle)`` heading links to the
+    Uses a text display and a media gallery. Video media is represented as a
+    gallery item so Discord can show a preview frame with playback controls.
+    An optional footer text display is appended last. The whole ``Name (@handle)`` heading links to the
     tweet; display names with emoji link only the handle, since Discord bans
     emoji in link labels.
 
@@ -715,19 +713,6 @@ def build_discord_component_embed(  # ruff: ignore[too-many-arguments]
                 "content": "\n\n".join(content_parts),
             },
         ]
-        if json_url:
-            components.append({
-                "type": 1,
-                "components": [
-                    {
-                        "type": 2,
-                        "style": 5,
-                        "url": json_url,
-                        "label": "JSON",
-                    },
-                ],
-            })
-
         if quality_note:
             components.extend(({"type": 14}, {"type": 10, "content": quality_note}))
 
@@ -936,7 +921,7 @@ async def twitter(  # ruff: ignore[too-many-locals]
     screen_name: str = str(author.get("screen_name") or username)
     tweet_url: str = f"https://x.com/{screen_name}/status/{tweet_id}"
     local_url: str = f"https://e.lovinator.space/{screen_name}/status/{tweet_id}"
-    json_url: str = f"{str(request.base_url).rstrip('/')}/twitter/json/{quote(screen_name, safe='')}/{tweet_id}"
+    json_url: str = f"{local_url}/json"
 
     logger.info(f"Serving tweet embed: {tweet_id}")
 
@@ -1001,7 +986,6 @@ async def twitter(  # ruff: ignore[too-many-locals]
         images=photos,
         video=video,
         quality_note=quality_note,
-        json_url=json_url,
         footer=component_footer,
         tweet_url=tweet_url,
     )
@@ -1040,13 +1024,20 @@ async def twitter(  # ruff: ignore[too-many-locals]
     return response
 
 
-@get("/twitter/json/{username:str}/{tweet_id:str}")
+@get(
+    path=[
+        "/twitter/json/{username:str}/{tweet_id:str}",
+        "/{username:str}/status/{tweet_id:str}/json",
+    ]
+)
 async def tweet_json_file(  # ruff: ignore[unused-async]
     request: Request,
     username: Annotated[str, PathParameter()],
     tweet_id: Annotated[str, PathParameter()],
 ) -> File:
     """Serve a tweet's cached fxtwitter JSON inline in the browser.
+
+    Available at ``/twitter/json/<user>/<id>`` and ``/<user>/status/<id>/json``.
 
     Fetches the tweet first if it isn't cached yet (or if the URL has any query
     string), so the JSON link always has a file to serve.

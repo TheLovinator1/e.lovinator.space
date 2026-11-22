@@ -569,8 +569,13 @@ def test_force_refresh_fetches_and_overwrites_cache(monkeypatch: pytest.MonkeyPa
     assert json.loads(cache_file.read_text(encoding="utf-8"))["status"]["text"] == "new"
 
 
-def test_json_endpoint_serves_cached_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """The JSON endpoint should return the saved JSON inline for browser viewing."""
+@pytest.mark.parametrize("path", ["/twitter/json/someuser/123", "/someuser/status/123/json"])
+def test_json_endpoint_serves_cached_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    path: str,
+) -> None:
+    """The JSON endpoints should return the saved JSON inline for browser viewing."""
     monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
     write_tweet_cache(tmp_path, "123", "hello")
 
@@ -581,7 +586,7 @@ def test_json_endpoint_serves_cached_file(monkeypatch: pytest.MonkeyPatch, tmp_p
     monkeypatch.setattr(twitter_module.niquests, "get", unexpected_fetch)
     client: TestClient[Litestar] = TestClient(app=app)
 
-    response: Response = client.get("/twitter/json/someuser/123")
+    response: Response = client.get(path)
 
     assert response.status_code == 200
     assert response.json()["status"]["text"] == "hello"
@@ -590,7 +595,12 @@ def test_json_endpoint_serves_cached_file(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert "123.json" in response.headers["content-disposition"]
 
 
-def test_any_query_string_refreshes_json_endpoint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("path", ["/twitter/json/someuser/123", "/someuser/status/123/json"])
+def test_any_query_string_refreshes_json_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    path: str,
+) -> None:
     """Any query string should replace the cached JSON before serving it."""
     monkeypatch.setattr(twitter_module, "data_dir", lambda: tmp_path)
     cache_file: Path = write_tweet_cache(tmp_path, "123", "old")
@@ -598,39 +608,15 @@ def test_any_query_string_refreshes_json_endpoint(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(twitter_module.niquests, "get", lambda *a, **kw: FakeResponse(fetched))
     client: TestClient[Litestar] = TestClient(app=app)
 
-    response: Response = client.get("/twitter/json/someuser/123?whatever=1")
+    response: Response = client.get(f"{path}?whatever=1")
 
     assert response.status_code == 200
     assert response.json()["status"]["text"] == "fresh"
     assert json.loads(cache_file.read_text(encoding="utf-8"))["status"]["text"] == "fresh"
 
 
-def test_component_embed_has_only_json_button() -> None:
-    """The component embed should offer the JSON link without an X button."""
-    payload: dict[str, Any] = build_discord_component_embed(
-        author_name="Some User",
-        text="hello",
-        description="",
-        username="someuser",
-        images=[],
-        video=None,
-        json_url="https://e.lovinator.space/twitter/json/someuser/123",
-    )
-
-    components: list[dict[str, Any]] = payload["component"]["components"]
-    assert components[0]["type"] == 10
-
-    action_rows: list[dict[str, Any]] = [component for component in components if component.get("type") == 1]
-    assert len(action_rows) == 1
-    buttons: list[dict[str, Any]] = action_rows[0]["components"]
-    assert [button["label"] for button in buttons] == ["JSON"]
-    assert buttons[0]["url"] == "https://e.lovinator.space/twitter/json/someuser/123"
-    assert all(button["style"] == 5 for button in buttons)
-    assert "Open on X" not in json.dumps(payload)
-
-
-def test_component_embed_without_json_url_has_text_only() -> None:
-    """Without a JSON URL there should be no action row at all."""
+def test_component_embed_has_no_buttons() -> None:
+    """The component embed has no action row; JSON is available at /json."""
     payload: dict[str, Any] = build_discord_component_embed(
         author_name="Some User",
         text="hello",
@@ -654,7 +640,7 @@ def test_tweet_page_links_to_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     response: Response = client.get("/someuser/status/123", headers={"x-forwarded-for": "127.0.0.1"})
 
     assert response.status_code == 200
-    assert "/twitter/json/someuser/123" in response.text
+    assert "/someuser/status/123/json" in response.text
     assert ">JSON</a>" in response.text
 
 
