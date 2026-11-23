@@ -41,15 +41,19 @@
     </head>
     <body>
         <main>
-            <h1>{{ title }}</h1>
-            <p>{{ description }}</p>
+            <h1><a href="{{ canonical_url }}">{{ title }}</a></h1>
+            {% if description %}
+                <p>{{ description }}</p>
+            {% endif %}
             {% if og_image %}
                 <img src="{{ og_image.url }}" alt="{{ title }}">
             {% elif video %}
                 <video src="{{ video.url }}" controls>
                 </video>
             {% endif %}
-            <p><a href="{{ canonical_url }}">Open on Reddit</a></p>
+            {% if footer %}
+                <p>{{ footer | safe }}</p>
+            {% endif %}
         </main>
     </body>
 </html>

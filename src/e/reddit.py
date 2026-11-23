@@ -28,6 +28,8 @@ from litestar.response import Template
 from loguru import logger
 from platformdirs import PlatformDirs
 
+from e.twitter import _EMOJI_PATTERN
+from e.twitter import contains_emoji
 from e.twitter import format_count
 from e.twitter import get_client_ip
 from e.twitter import is_discord_client
@@ -198,10 +200,10 @@ def get_subreddit_about(subreddit: str) -> dict[str, Any]:
 
 def format_subreddit_stats(about: dict[str, Any]) -> str:
     """Build a short, human-readable stats line for a subreddit."""
-    parts: list[str] = [f"👥 {format_count(safe_int(about.get('subscribers')))} members"]
+    parts: list[str] = [f"{format_count(safe_int(about.get('subscribers')))} members"]
 
     if "active_user_count" in about:
-        parts.append(f"🟢 {format_count(safe_int(about.get('active_user_count')))} online")
+        parts.append(f"{format_count(safe_int(about.get('active_user_count')))} online")
 
     created: str | None = None
     if created_utc := safe_int(about.get("created_utc")):
@@ -210,7 +212,7 @@ def format_subreddit_stats(about: dict[str, Any]) -> str:
         except (OSError, OverflowError, ValueError):
             logger.debug("Ignoring invalid subreddit creation timestamp: {}", created_utc)
     if created:
-        parts.append(f"📅 Created {created}")
+        parts.append(f"Created {created}")
 
     return " • ".join(parts)
 
@@ -355,6 +357,7 @@ def build_discord_component_embed(
     *,
     title_url: str | None = None,
     thumbnail_url: str | None = None,
+    footer: str = "",
 ) -> str:
     """Build a Discord Component Embed and return its HTML-safe JSON string.
 
@@ -401,24 +404,28 @@ def build_discord_component_embed(
         if body:
             content = f"{content}\n{body}" if content else body
 
-        accessory: dict[str, Any] = thumbnail or {
-            "type": 2,
-            "style": 5,
-            "url": canonical_url,
-            "label": "Open Reddit",
-        }
-        components: list[dict[str, Any]] = [
+        text_components: list[dict[str, Any]] = [
             {
-                "type": 9,
-                "components": [
-                    {
-                        "type": 10,
-                        "content": content,
-                    },
-                ],
-                "accessory": accessory,
+                "type": 10,
+                "content": content,
             },
         ]
+
+        if footer:
+            text_components.append({
+                "type": 10,
+                "content": footer,
+            })
+
+        components: list[dict[str, Any]] = []
+        if thumbnail:
+            components.append({
+                "type": 9,
+                "components": text_components,
+                "accessory": thumbnail,
+            })
+        else:
+            components.extend(text_components)
 
         if media_items:
             components.append({
@@ -586,13 +593,30 @@ async def reddit(
         video["url"] = await _resolve_video_url(request, video, subreddit, post_id)
 
     title: str = str(post.get("title") or "Reddit")
+    if contains_emoji(title):
+        title = _EMOJI_PATTERN.sub("", title).strip() or "Reddit"
+
     author: str = str(post.get("author") or "reddit")
     post_subreddit: str = str(post.get("subreddit") or subreddit)
     upvotes: str = format_count(int(post.get("ups") or post.get("score") or 0))
     comments: str = format_count(int(post.get("num_comments") or 0))
-    summary: str = f"u/{author} in r/{post_subreddit} | {upvotes} upvotes | {comments} comments"
+    author_url: str = f"https://www.reddit.com/user/{quote(author, safe='')}"
+    subreddit_url: str = f"https://www.reddit.com/r/{quote(post_subreddit, safe='')}"
+    footer: str = (
+        f"[/u/{author}]({author_url}) in "
+        f"[/r/{post_subreddit}]({subreddit_url}) • "
+        f"{upvotes} upvotes • {comments} comments"
+    )
+    footer_html: str = (
+        f'<a href="{html.escape(author_url, quote=True)}">/u/{html.escape(author)}</a> in '
+        f'<a href="{html.escape(subreddit_url, quote=True)}">/r/{html.escape(post_subreddit)}</a> • '
+        f"{html.escape(upvotes)} upvotes • {html.escape(comments)} comments"
+    )
     selftext: str = str(post.get("selftext") or "").strip()
-    description: str = f"{summary}\n\n{selftext}" if selftext else summary
+    description: str = selftext
+    og_description: str = f"/u/{author} in /r/{post_subreddit} • {upvotes} upvotes • {comments} comments"
+    if selftext:
+        og_description = f"{og_description}\n\n{selftext}"
 
     component_embed_json: str = build_discord_component_embed(
         title=title,
@@ -600,6 +624,8 @@ async def reddit(
         canonical_url=canonical_url,
         images=images,
         video=video,
+        title_url=canonical_url,
+        footer=footer,
     )
 
     og_image: dict[str, Any] | None = images[0] if images else ({"url": poster} if poster else None)
@@ -613,10 +639,11 @@ async def reddit(
             "og_image": og_image,
             "og_type": "video.other" if video else "article",
             "title": title,
-            "description": description,
+            "description": og_description,
             "canonical_url": canonical_url,
             "author": author,
             "subreddit": post_subreddit,
+            "footer": footer_html,
             "discord_component_embed_json": component_embed_json,
         },
     )

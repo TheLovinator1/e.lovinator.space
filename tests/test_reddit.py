@@ -218,7 +218,9 @@ def test_reddit_embed_omits_twitter_alternate_links(monkeypatch: pytest.MonkeyPa
     assert "application/activity+json" not in response.text
     assert "application/json+oembed" not in response.text
     assert '<meta property="og:title" content="A post">' in response.text
-    assert "u/someone in r/python | 10.9K upvotes | 165 comments" in response.text
+    assert "/u/someone in /r/python • 10.9K upvotes • 165 comments" in response.text
+    assert '[/u/someone](https://www.reddit.com/user/someone)' in response.text
+    assert '[/r/python](https://www.reddit.com/r/python)' in response.text
     assert 'content="https://v.redd.it/example/CMAF_720.mp4"' in response.text
     assert 'content="https://external-preview.redd.it/example.jpg"' in response.text
 
